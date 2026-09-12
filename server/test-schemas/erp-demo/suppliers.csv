@@ -1,0 +1,4 @@
+supplier_id,supplier_name,contact_email,payment_terms,country
+SUP-001,Acme Industrial Supplies,orders@acme-ind.com,Net 30,India
+SUP-002,Global Paper Co,purchasing@globalpaper.com,Net 15,India
+SUP-003,Metro Hardware Ltd,sales@metrohardware.com,Net 45,India

@@ -1,0 +1,12 @@
+model: data_model_demo.xlsx
+seed: 7
+locale: en_US
+targets:
+  category:    {rows: 6}
+  customer:    {rows: 300}
+  product:     {rows: 500}
+  sales_order: {rows: derived}
+  order_item:  {rows: derived}
+output:
+  format: [csv, xlsx]
+  path: ./output/run_retail_demo/

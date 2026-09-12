@@ -1,0 +1,40 @@
+{
+  "name": "synthgen-server",
+  "version": "0.1.0",
+  "description": "SynthGen Node.js API — spawns the Python engine and gates downloads on validation.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "smoke": "tsx src/smoke.ts",
+    "smoke:agent": "tsx src/smoke-agent.ts",
+    "smoke:review": "tsx src/smoke-review.ts",
+    "smoke:update": "tsx src/smoke-update.ts",
+    "smoke:procurement": "tsx src/smoke-procurement.ts",
+    "verify:e2e": "tsx src/verify-procurement-e2e.ts",
+    "smoke:register": "tsx src/smoke-register-workbook.ts",
+    "register:erp": "tsx src/register-erp-model.ts",
+    "smoke:partial": "tsx src/smoke-partial.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "archiver": "^7.0.1",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "js-yaml": "^4.1.0",
+    "multer": "^1.4.5-lts.1",
+    "uuid": "^11.0.5",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/archiver": "^6.0.3",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.10.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,4 @@
+employee_id,employee_name,email,department_id,job_title,hire_date
+EMP-0001,Asha Patel,asha.patel@erp-demo.com,DEPT-001,Accountant,2022-03-15
+EMP-0002,Ravi Kumar,ravi.kumar@erp-demo.com,DEPT-002,Buyer,2021-07-01
+EMP-0003,Meera Singh,meera.singh@erp-demo.com,DEPT-003,Warehouse Lead,2020-11-20

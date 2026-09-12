@@ -1,0 +1,4 @@
+product_id,product_name,category,unit_price,unit_of_measure
+PRD-1001,Office Chair,Office Supplies,120.00,EA
+PRD-1002,A4 Paper Ream,Office Supplies,8.50,EA
+PRD-2001,Steel Bolt M8,Raw Material,0.45,EA

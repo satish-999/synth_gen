@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SynthGen — Synthetic Data Generator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#FAFAF7; --grid:#E7E9E4; --ink:#1B2A41; --ink-soft:#5A6B84;
+  --teal:#0E7C7B; --teal-soft:#E3F1F0; --pass:#2E7D4F; --pass-soft:#E6F2EB;
+  --fail:#B3402A; --fail-soft:#F7E8E4; --amber:#C97B1A; --card:#FFFFFF;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:'Inter',system-ui,sans-serif;color:var(--ink);
+  background:var(--paper);
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),
+                   linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:28px 28px;
+  min-height:100vh;
+}
+header{padding:34px 24px 10px;max-width:1060px;margin:0 auto}
+h1{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:clamp(26px,4vw,38px);letter-spacing:-.5px}
+h1 .mono{font-family:'IBM Plex Mono',monospace;color:var(--teal)}
+.sub{color:var(--ink-soft);margin-top:6px;font-size:15px;max-width:640px}
+/* pipeline rail — the signature */
+.rail{display:flex;gap:0;max-width:1060px;margin:22px auto 8px;padding:0 24px;flex-wrap:wrap}
+.stage{display:flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--ink-soft)}
+.stage .dot{width:11px;height:11px;border-radius:50%;border:2px solid var(--ink-soft);background:transparent;transition:all .35s}
+.stage.active{color:var(--ink)} .stage.active .dot{border-color:var(--teal);background:var(--teal);box-shadow:0 0 0 4px var(--teal-soft)}
+.stage.done .dot{border-color:var(--pass);background:var(--pass)}
+.stage.failed .dot{border-color:var(--fail);background:var(--fail)}
+.rail .link{flex:0 0 30px;height:2px;background:var(--grid);margin:0 8px;align-self:center}
+main{max-width:1060px;margin:0 auto;padding:10px 24px 70px;display:flex;flex-direction:column;gap:18px}
+.card{background:var(--card);border:1px solid var(--grid);border-radius:10px;padding:20px 22px;box-shadow:0 1px 2px rgba(27,42,65,.05)}
+.card h2{font-family:'Space Grotesk',sans-serif;font-size:17px;margin-bottom:4px;display:flex;align-items:center;gap:10px}
+.card h2 .step{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--teal);background:var(--teal-soft);border-radius:4px;padding:2px 7px}
+.hint{color:var(--ink-soft);font-size:13px;margin-bottom:14px}
+select,input[type=number]{font-family:'IBM Plex Mono',monospace;font-size:14px;padding:9px 11px;border:1.5px solid var(--grid);border-radius:7px;background:#fff;color:var(--ink);width:100%}
+select:focus,input:focus{outline:2px solid var(--teal);outline-offset:1px}
+.obj-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:10px}
+.obj{border:1.5px solid var(--grid);border-radius:8px;padding:11px 13px;cursor:pointer;background:#fff;display:flex;gap:10px;align-items:flex-start;transition:border-color .15s}
+.obj input{margin-top:3px;accent-color:var(--teal)}
+.obj.on{border-color:var(--teal);background:var(--teal-soft)}
+.obj .nm{font-family:'IBM Plex Mono',monospace;font-size:13.5px;font-weight:600}
+.obj .ds{font-size:12px;color:var(--ink-soft);margin-top:2px}
+.obj .tag{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--amber);margin-top:3px}
+.autonote{margin-top:10px;font-size:13px;color:var(--teal);font-family:'IBM Plex Mono',monospace;min-height:18px}
+.opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}
+.opts label{font-size:12px;font-weight:600;color:var(--ink-soft);display:block;margin-bottom:5px;font-family:'IBM Plex Mono',monospace}
+.derived-pill{font-family:'IBM Plex Mono',monospace;font-size:13px;padding:9px 11px;border:1.5px dashed var(--grid);border-radius:7px;color:var(--ink-soft);background:var(--paper)}
+button.go{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:16px;background:var(--ink);color:#fff;border:0;border-radius:8px;padding:13px 30px;cursor:pointer;transition:transform .1s, background .15s}
+button.go:hover{background:var(--teal)} button.go:active{transform:scale(.98)}
+.vcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+.vc{border-radius:8px;padding:12px 14px;font-family:'IBM Plex Mono',monospace;font-size:13px;border:1.5px solid}
+.vc.ok{background:var(--pass-soft);border-color:var(--pass);color:var(--pass)}
+.vc.bad{background:var(--fail-soft);border-color:var(--fail);color:var(--fail)}
+.vc .big{font-weight:600;font-size:14px} .vc .chk{font-size:11.5px;margin-top:4px;color:inherit;opacity:.85}
+.files{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+.file{border:1.5px solid var(--grid);border-radius:8px;padding:13px 15px;background:#fff}
+.file .fn{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:13.5px}
+.file .rows{font-size:22px;font-family:'Space Grotesk',sans-serif;font-weight:700;margin:4px 0 2px}
+.file .rows small{font-size:12px;color:var(--ink-soft);font-weight:400}
+.file .acts{display:flex;gap:12px;margin-top:8px}
+.file a,.file button{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--teal);background:none;border:none;cursor:pointer;text-decoration:underline;padding:0}
+.preview{overflow-x:auto;margin-top:12px}
+table{border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:12px;white-space:nowrap}
+th,td{border:1px solid var(--grid);padding:5px 9px;text-align:left}
+th{background:var(--paper);position:sticky;top:0}
+.hist td,.hist th{font-size:12px}
+.banner{border-radius:8px;padding:12px 16px;font-size:14px;font-weight:600;font-family:'IBM Plex Mono',monospace}
+.banner.ok{background:var(--pass-soft);color:var(--pass)} .banner.bad{background:var(--fail-soft);color:var(--fail)}
+.hidden{display:none}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="mono">SynthGen</span> · Synthetic Data Generator</h1>
+  <p class="sub">Pick a data model, pick datasets, generate. Relationships, business rules and derived logic come from the model — every run is validated before any file is offered.</p>
+</header>
+
+<div class="rail" id="rail">
+  <div class="stage" data-s="0"><span class="dot"></span>Model</div><div class="link"></div>
+  <div class="stage" data-s="1"><span class="dot"></span>Datasets</div><div class="link"></div>
+  <div class="stage" data-s="2"><span class="dot"></span>Options</div><div class="link"></div>
+  <div class="stage" data-s="3"><span class="dot"></span>Generate</div><div class="link"></div>
+  <div class="stage" data-s="4"><span class="dot"></span>Validate</div><div class="link"></div>
+  <div class="stage" data-s="5"><span class="dot"></span>Files</div>
+</div>
+
+<main>
+  <section class="card">
+    <h2><span class="step">1</span>Data model</h2>
+    <p class="hint">The governed workbook: schema, keys, relationships, distributions, rules. The engine has no knowledge of its own.</p>
+    <select id="modelSel"></select>
+  </section>
+
+  <section class="card">
+    <h2><span class="step">2</span>Datasets</h2>
+    <p class="hint">Select what you need — required relationship parents are included automatically.</p>
+    <div class="obj-grid" id="objGrid"></div>
+    <div class="autonote" id="autoNote"></div>
+  </section>
+
+  <section class="card">
+    <h2><span class="step">3</span>Options</h2>
+    <p class="hint">Row counts for independent tables; children size themselves from relationship cardinality. Same seed → identical data.</p>
+    <div class="opts" id="opts"></div>
+  </section>
+
+  <section class="card" style="text-align:center">
+    <button class="go" id="goBtn">Generate</button>
+  </section>
+
+  <section class="card hidden" id="valCard">
+    <h2><span class="step">4</span>Validation</h2>
+    <p class="hint">Independent checks: key uniqueness, relationship integrity, business rules, derived logic. Anything less than 100% blocks the files.</p>
+    <div class="vcards" id="vcards"></div>
+    <div style="margin-top:12px" id="valBanner"></div>
+  </section>
+
+  <section class="card hidden" id="fileCard">
+    <h2><span class="step">5</span>Files</h2>
+    <div class="files" id="files"></div>
+    <div class="preview" id="preview"></div>
+  </section>
+
+  <section class="card hidden" id="histCard">
+    <h2>Run history</h2>
+    <div class="preview"><table class="hist" id="histT"><thead><tr><th>run</th><th>model</th><th>seed</th><th>objects</th><th>rows</th><th>result</th></tr></thead><tbody></tbody></table></div>
+  </section>
+</main>
+
+<script>
+/* ---------- seeded randomness ---------- */
+let R;
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const rnd=()=>R(), rint=(a,b)=>a+Math.floor(rnd()*(b-a+1));
+function poisson(l){let L=Math.exp(-l),k=0,p=1;do{k++;p*=rnd()}while(p>L);return k-1}
+function lognormal(mu,sig){let u=Math.sqrt(-2*Math.log(rnd()||1e-9))*Math.cos(2*Math.PI*rnd());return Math.exp(mu+sig*u)}
+function choice(vals,wts){if(!wts)return vals[rint(0,vals.length-1)];let r=rnd()*wts.reduce((a,b)=>a+b,0);for(let i=0;i<vals.length;i++){r-=wts[i];if(r<=0)return vals[i]}return vals[vals.length-1]}
+function pattern(p){let s="";for(const ch of p)s+=ch==="#"?"0123456789"[rint(0,9)]:ch==="?"?"ABCDEFGHIJKLMNOPQRSTUVWXYZ"[rint(0,25)]:ch;return s}
+const FIRST=["Aarav","Diya","Kabir","Meera","Rohan","Anika","Vikram","Sana","Arjun","Nisha","Dev","Priya","Karan","Isha","Ravi","Tara"];
+const LAST=["Sharma","Iyer","Patel","Reddy","Khan","Das","Mehta","Nair","Rao","Bose","Gupta","Joshi","Kulkarni","Menon","Verma","Chawla"];
+const fakerName=()=>FIRST[rint(0,FIRST.length-1)]+" "+LAST[rint(0,LAST.length-1)];
+const fakerEmail=n=>n.toLowerCase().replace(/[^a-z]+/g,".")+rint(1,99)+"@example.com";
+const day=864e5, D=s=>new Date(s+"T00:00:00Z").getTime();
+const iso=t=>t==null?"":new Date(t).toISOString().slice(0,10);
+
+/* ---------- models (JS form of the workbook) ---------- */
+const MODELS={
+ "Retail demo (5 tables + view)":{
+  order:["category","customer","product","sales_order","order_item"],
+  tables:{
+   category:{pk:["category_code"],desc:"Product category dimension",gen:n=>range(n).map(()=>({category_code:uniq("cat",()=>pattern("CT-##")),category_name:choice(["Electronics","Home","Sports","Beauty","Toys","Grocery"])}))},
+   customer:{pk:["customer_id"],desc:"Customer master",gen:n=>range(n).map(()=>{const nm=fakerName();return{customer_id:uniq("cus",()=>pattern("CUS-#####")),customer_name:nm,email:fakerEmail(nm),city:choice(["Hyderabad","Mumbai","Bengaluru","Chennai","Pune","Delhi"],[.25,.2,.2,.15,.1,.1]),segment:choice(["RETAIL","ONLINE","WHOLESALE"],[.5,.35,.15])}})},
+   product:{pk:["product_id"],desc:"Product catalog · FK→category",fk:["category"],gen:(n,F)=>range(n).map(()=>({product_id:uniq("prd",()=>pattern("PRD-#####")),product_name:choice(["Wireless Mouse","Yoga Mat","Face Serum","Board Game","Blender","Desk Lamp","Running Shoes","Protein Bar"]),category_ref:pick(F.category,"category_code"),list_price:+Math.min(5000,Math.max(2,lognormal(3.5,.9))).toFixed(2)})),fkCheck:{category_ref:["category","category_code"]}},
+   sales_order:{pk:["order_id"],desc:"Order header · sized 0–30/customer, poisson(5)",fk:["customer"],sizing:true,
+    gen:(_,F)=>{const rows=[];for(const c of F.customer){let k=rnd()<.10?0:Math.min(30,poisson(5));for(let i=0;i<k;i++){
+      const od=D("2025-07-01")+rint(0,364)*day, pd=od+rint(3,21)*day;
+      let dd=pd+rint(-5,7)*day; if(dd<od)dd=od+rint(1,5)*day;             // bound rule R5
+      const st=choice(["PLACED","SHIPPED","DELIVERED","CANCELLED"],[.15,.15,.62,.08]);
+      if(st==="PLACED"||st==="CANCELLED")dd=null;                          // conditional R3
+      rows.push({order_id:uniq("ord",()=>pattern("ORD-2026-######")),customer_ref:c.customer_id,order_date:od,promised_date:pd,delivered_date:dd,order_status:st,
+        delivery_status:dd==null?"PENDING":dd>pd?"LATE":dd<pd?"EARLY":"ON_TIME"});}} return rows},
+    dates:["order_date","promised_date","delivered_date"],fkCheck:{customer_ref:["customer","customer_id"]},
+    ruleChecks:[["R1 order≤promised",r=>r.order_date<=r.promised_date],["R5 delivered≥order",r=>r.delivered_date==null||r.delivered_date>=r.order_date],
+      ["R2 DELIVERED⇒date",r=>r.order_status!=="DELIVERED"||r.delivered_date!=null],["R3 PLACED/CANC⇒null",r=>!(["PLACED","CANCELLED"].includes(r.order_status))||r.delivered_date==null],
+      ["case delivery_status",r=>r.delivery_status===(r.delivered_date==null?"PENDING":r.delivered_date>r.promised_date?"LATE":r.delivered_date<r.promised_date?"EARLY":"ON_TIME")]]},
+   order_item:{pk:["order_ref","item_nbr"],desc:"Line items · 1–10/order, price≈catalog±10%",fk:["sales_order","product"],sizing:true,
+    gen:(_,F)=>{const lut={};for(const p of F.product)lut[p.product_id]=p.list_price;const rows=[];
+     for(const o of F.sales_order){let k=Math.max(1,Math.min(10,poisson(2.5)));for(let i=1;i<=k;i++){
+       const pr=pick(F.product,"product_id");const up=+(lut[pr]*(1+(rnd()*.2-.1))).toFixed(2);const q=rint(1,20);
+       rows.push({order_ref:o.order_id,item_nbr:i,product_ref:pr,quantity:q,unit_price:up,line_amount:+(q*up).toFixed(2)});}} return rows},
+    fkCheck:{order_ref:["sales_order","order_id"],product_ref:["product","product_id"]},
+    ruleChecks:[["R4 amount=qty×price",r=>Math.abs(r.line_amount-r.quantity*r.unit_price)<.011],["seq per order",()=>true]]},
+  },
+  view:{name:"VW_CATEGORY_REVENUE",desc:"Revenue by category — computed, never fabricated",needs:["order_item","product"],
+   compute:F=>{const cat={};const lut={};for(const p of F.product)lut[p.product_id]=p.category_ref;
+    for(const it of F.order_item){const c=lut[it.product_ref];cat[c]??={category_ref:c,items_sold:0,units_sold:0,revenue:0};
+     cat[c].items_sold++;cat[c].units_sold+=it.quantity;cat[c].revenue+=it.line_amount;}
+    return Object.values(cat).map(r=>({...r,revenue:+r.revenue.toFixed(2),avg_item_value:+(r.revenue/r.items_sold).toFixed(2)})).sort((a,b)=>a.category_ref<b.category_ref?-1:1)}}
+ },
+ "Library mini (3 tables)":{
+  order:["member","book","loan"],
+  tables:{
+   member:{pk:["member_id"],desc:"Library members",gen:n=>range(n).map(()=>{const nm=fakerName();return{member_id:uniq("mem",()=>pattern("MB-####")),member_name:nm,email:fakerEmail(nm),tier:choice(["BASIC","PLUS"],[.7,.3])}})},
+   book:{pk:["book_id"],desc:"Book catalog",gen:n=>range(n).map(()=>({book_id:uniq("bk",()=>pattern("BK-#####")),title:choice(["River of Ink","The Ninth Gate","Monsoon Letters","Silent Circuit","Paper Kingdoms","Blue Meridian"]),genre:choice(["Fiction","Sci-Fi","History","Poetry"],[.4,.25,.25,.1])}))},
+   loan:{pk:["loan_id"],desc:"Loans · 0–12/member, poisson(3)",fk:["member","book"],sizing:true,
+    gen:(_,F)=>{const rows=[];for(const m of F.member){let k=Math.min(12,poisson(3));for(let i=0;i<k;i++){
+      const od=D("2026-01-01")+rint(0,180)*day;const due=od+14*day;let rd=od+rint(3,25)*day;
+      const st=rnd()<.85?"RETURNED":"OPEN"; if(st==="OPEN")rd=null;
+      rows.push({loan_id:uniq("ln",()=>pattern("LN-######")),member_ref:m.member_id,book_ref:pick(F.book,"book_id"),loan_date:od,due_date:due,returned_date:rd,status:st,
+       late_flag:rd==null?"":(rd>due?"LATE":"ON_TIME")});}}return rows},
+    dates:["loan_date","due_date","returned_date"],fkCheck:{member_ref:["member","member_id"],book_ref:["book","book_id"]},
+    ruleChecks:[["OPEN⇒no return date",r=>r.status!=="OPEN"||r.returned_date==null],["case late_flag",r=>r.returned_date==null?r.late_flag==="":r.late_flag===(r.returned_date>r.due_date?"LATE":"ON_TIME")]]}
+  },
+  view:null
+ }
+};
+
+/* ---------- helpers ---------- */
+const range=n=>Array.from({length:n});
+let uniqSets={};
+function uniq(ns,fn){uniqSets[ns]??=new Set();let v=fn();while(uniqSets[ns].has(v))v=fn();uniqSets[ns].add(v);return v}
+const pick=(arr,k)=>arr[rint(0,arr.length-1)][k];
+const $=id=>document.getElementById(id);
+
+/* ---------- UI wiring ---------- */
+const modelSel=$("modelSel");
+Object.keys(MODELS).forEach(k=>{const o=document.createElement("option");o.textContent=k;modelSel.append(o)});
+let cur;
+function loadModel(){cur=MODELS[modelSel.value];renderObjects();setStage(0,"done");setStage(1,"active")}
+modelSel.onchange=loadModel;
+
+function renderObjects(){
+  const g=$("objGrid");g.innerHTML="";
+  for(const [t,spec] of Object.entries(cur.tables)){
+    const d=document.createElement("label");d.className="obj on";
+    d.innerHTML=`<input type="checkbox" checked data-t="${t}"><div><div class="nm">${t}</div><div class="ds">${spec.desc}</div>${spec.sizing?'<div class="tag">rows: derived (from cardinality)</div>':""}</div>`;
+    d.querySelector("input").onchange=e=>{d.classList.toggle("on",e.target.checked);resolveDeps()};
+    g.append(d);
+  }
+  if(cur.view){const d=document.createElement("label");d.className="obj on";
+   d.innerHTML=`<input type="checkbox" checked data-t="__view"><div><div class="nm">${cur.view.name}</div><div class="ds">${cur.view.desc}</div><div class="tag">VIEW — always computed</div></div>`;
+   d.querySelector("input").onchange=e=>d.classList.toggle("on",e.target.checked);g.append(d)}
+  resolveDeps();renderOpts();
+}
+function selectedTables(){return [...document.querySelectorAll('#objGrid input[data-t]:checked')].map(i=>i.dataset.t).filter(t=>t!=="__view")}
+function viewOn(){return !!document.querySelector('#objGrid input[data-t="__view"]:checked')}
+function resolveDeps(){
+  const sel=new Set(selectedTables());const added=[];let ch=true;
+  while(ch){ch=false;for(const t of [...sel])for(const p of (cur.tables[t].fk||[]))if(!sel.has(p)){sel.add(p);added.push(p);ch=true}}
+  for(const i of document.querySelectorAll('#objGrid input[data-t]')){
+    if(i.dataset.t!=="__view"&&sel.has(i.dataset.t)&&!i.checked){i.checked=true;i.closest(".obj").classList.add("on")}}
+  $("autoNote").textContent=added.length?`↳ auto-included relationship parents: ${[...new Set(added)].join(", ")}`:"";
+  renderOpts();
+}
+function renderOpts(){
+  const o=$("opts");o.innerHTML="";
+  for(const t of selectedTables()){
+    const spec=cur.tables[t];const w=document.createElement("div");
+    w.innerHTML=spec.sizing?`<label>${t} rows</label><div class="derived-pill">derived</div>`
+      :`<label>${t} rows</label><input type="number" min="1" value="${t==="category"?6:t==="product"||t==="book"?300:200}" data-rows="${t}">`;
+    o.append(w);
+  }
+  const s=document.createElement("div");s.innerHTML=`<label>seed</label><input type="number" id="seed" value="42">`;o.append(s);
+  setStage(2,"active");
+}
+
+/* ---------- pipeline rail ---------- */
+function setStage(i,cls){const st=document.querySelector(`.stage[data-s="${i}"]`);st.classList.remove("active","done","failed");if(cls)st.classList.add(cls)}
+function doneThrough(i){for(let k=0;k<=i;k++)setStage(k,"done")}
+
+/* ---------- generate ---------- */
+$("goBtn").onclick=()=>{
+  const seed=+($("seed")?.value||42);R=mulberry32(seed);uniqSets={};
+  doneThrough(2);setStage(3,"active");
+  const frames={},sel=selectedTables();
+  for(const t of cur.order) if(sel.includes(t)){
+    const rowsIn=document.querySelector(`input[data-rows="${t}"]`);
+    frames[t]=cur.tables[t].gen(rowsIn?+rowsIn.value:0,frames);
+  }
+  if(cur.view&&viewOn()&&cur.view.needs.every(n=>frames[n])) frames[cur.view.name]=cur.view.compute(frames);
+  setStage(3,"done");setStage(4,"active");
+
+  /* validation */
+  const vc=$("vcards");vc.innerHTML="";let allOk=true;
+  for(const t of Object.keys(frames)){
+    const spec=cur.tables[t];const checks=[];
+    if(spec){
+      const seen=new Set();let dup=0;
+      for(const r of frames[t]){const k=spec.pk.map(c=>r[c]).join("|");if(seen.has(k))dup++;seen.add(k)}
+      checks.push([`PK unique`,dup===0]);
+      for(const [col,[pt,pc]] of Object.entries(spec.fkCheck||{})){
+        const pool=new Set(frames[pt].map(r=>r[pc]));
+        checks.push([`FK ${col}`,frames[t].every(r=>pool.has(r[col]))]);
+      }
+      for(const [nm,fn] of (spec.ruleChecks||[])) checks.push([nm,frames[t].every(fn)]);
+    } else {
+      const rev=frames["order_item"].reduce((a,r)=>a+r.line_amount,0);
+      checks.push([`reconciles base (Δ ${(rev-frames[t].reduce((a,r)=>a+r.revenue,0)).toFixed(2)})`,Math.abs(rev-frames[t].reduce((a,r)=>a+r.revenue,0))<1]);
+    }
+    const ok=checks.every(c=>c[1]);allOk&&=ok;
+    const d=document.createElement("div");d.className="vc "+(ok?"ok":"bad");
+    d.innerHTML=`<div class="big">${ok?"✓":"✗"} ${t}</div>`+checks.map(c=>`<div class="chk">${c[1]?"✓":"✗"} ${c[0]}</div>`).join("");
+    vc.append(d);
+  }
+  $("valCard").classList.remove("hidden");
+  $("valBanner").innerHTML=allOk?`<div class="banner ok">MODEL COMPLIANCE: PASS — files released</div>`
+    :`<div class="banner bad">VALIDATION FAILED — no files offered. Fix the model and rerun.</div>`;
+  setStage(4,allOk?"done":"failed");
+
+  /* files */
+  const fc=$("files");fc.innerHTML="";$("preview").innerHTML="";
+  $("fileCard").classList.toggle("hidden",!allOk);
+  let totalRows=0;
+  if(allOk){
+    setStage(5,"done");
+    for(const [t,rows] of Object.entries(frames)){
+      totalRows+=rows.length;
+      const dateCols=cur.tables[t]?.dates||[];
+      const csvRows=rows.map(r=>{const o={...r};for(const c of dateCols)o[c]=iso(o[c]);return o});
+      const cols=Object.keys(csvRows[0]||{});
+      const csv=[cols.join(",")].concat(csvRows.map(r=>cols.map(c=>`${r[c]??""}`).join(","))).join("\n");
+      const url=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+      const d=document.createElement("div");d.className="file";
+      d.innerHTML=`<div class="fn">${t}.csv</div><div class="rows">${rows.length.toLocaleString()} <small>rows</small></div><div class="acts"><a download="${t}.csv" href="${url}">download</a><button data-pv="${t}">preview</button></div>`;
+      d.querySelector("button").onclick=()=>preview(t,csvRows.slice(0,8));
+      fc.append(d);
+    }
+  }
+  /* history */
+  $("histCard").classList.remove("hidden");
+  const tr=document.createElement("tr");
+  tr.innerHTML=`<td>${new Date().toLocaleTimeString()}</td><td>${modelSel.value}</td><td>${seed}</td><td>${Object.keys(frames).length}</td><td>${totalRows.toLocaleString()}</td><td style="color:${allOk?'var(--pass)':'var(--fail)'}">${allOk?"PASS":"FAIL"}</td>`;
+  $("histT").querySelector("tbody").prepend(tr);
+};
+function preview(t,rows){
+  const cols=Object.keys(rows[0]||{});
+  $("preview").innerHTML=`<div class="hint" style="margin:6px 0">${t} — first ${rows.length} rows</div><table><thead><tr>${cols.map(c=>`<th>${c}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${r[c]??""}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+loadModel();
+</script>
+</body>
+</html>

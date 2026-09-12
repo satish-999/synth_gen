@@ -1,0 +1,23 @@
+# Python
+engine/.venv/
+engine/output/
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime data (Phase 2+)
+registry/
+runs/
+uploads/
+node_modules/
+client/node_modules/
+client/dist/
+
+# Environment
+.env
+.env.local
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+*.log

@@ -1,0 +1,20 @@
+model: ../registry/erp_demo/v2/data_model.xlsx
+seed: 42
+locale: en_US
+targets:
+  departments:
+    rows: 20
+  employees:
+    rows: 50
+  suppliers:
+    rows: 50
+  products:
+    rows: 50
+  purchase_order:
+    rows: 200
+  purchase_order_line:
+    rows: 200
+output:
+  format:
+    - csv
+  path: ../runs/erp_manual_test

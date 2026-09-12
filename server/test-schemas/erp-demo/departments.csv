@@ -1,0 +1,4 @@
+department_id,department_name,cost_center,location
+DEPT-001,Finance,CC-100,Head Office
+DEPT-002,Procurement,CC-200,Head Office
+DEPT-003,Warehouse,CC-300,Plant A

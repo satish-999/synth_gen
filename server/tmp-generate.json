@@ -1,0 +1,1 @@
+{"family":"proc_demo","version":1,"tables":["buyer","cost_center","material","po_header","po_line","vendor"],"rows":{"buyer":50,"cost_center":20,"material":50,"po_header":100,"po_line":100,"vendor":50},"seed":42,"format":["xlsx"]}
