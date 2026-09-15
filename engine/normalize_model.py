@@ -203,7 +203,12 @@ def normalize(src: str | Path, dst: str | Path | None = None,
 
             # data_type labels such as "string (PK)"
             dt = str(col.get("data_type") or "").strip()
-            if "(" in dt:
+            # decimal(14,4), varchar(50), numeric(10,2) are valid type syntax and
+            # must be preserved; only prose in brackets is stripped
+            SQL_TYPE = re.compile(
+                r"^(decimal|numeric|dec|varchar|char|nvarchar|nchar|float|"
+                r"double|number)\s*\(\s*\d+\s*(,\s*\d+\s*)?\)$", re.I)
+            if "(" in dt and not SQL_TYPE.match(dt):
                 put(t, col, "data_type", dt.split("(")[0].strip())
                 res.add(FIXED, where, "data_type carried an explanatory label",
                         "label stripped", dt, dt.split("(")[0].strip())
@@ -358,22 +363,45 @@ def normalize(src: str | Path, dst: str | Path | None = None,
                             f"pattern '{pat}' has no # or ? placeholders, so every "
                             f"row would get the same value", "add placeholders", pat)
                 elif unique and _pattern_capacity(pat) < rows_hint:
-                    digits = pat.count("#")
-                    need = len(str(rows_hint)) + 1
-                    if digits:
-                        new = pat.replace("#" * digits, "#" * max(need, digits + 1))
-                        params["pattern"] = new
-                        put(t, col, "gen_params", _unparams(params))
-                        res.add(FIXED, where,
-                                f"unique pattern '{pat}' can only produce "
-                                f"{_pattern_capacity(pat):,} values; a larger run "
-                                f"would hang searching for a unique value",
-                                f"widened to {_pattern_capacity(new):,} values",
-                                pat, new)
-                    else:
+                    before_cap = _pattern_capacity(pat)
+                    runs = list(re.finditer(r"#+", pat))
+                    if runs:
+                        # widen the longest run of digits, wherever it sits in
+                        # the pattern (handles 'IND-###-U#' and '###/#')
+                        target = max(runs, key=lambda m: len(m.group()))
+                        extra = 0
+                        newpat = pat
+                        while _pattern_capacity(newpat) < rows_hint and extra < 12:
+                            extra += 1
+                            newpat = (pat[: target.start()]
+                                      + "#" * (len(target.group()) + extra)
+                                      + pat[target.end():])
+                        if newpat != pat:
+                            params["pattern"] = newpat
+                            put(t, col, "gen_params", _unparams(params))
+                            res.add(FIXED, where,
+                                    f"unique pattern '{pat}' can only produce "
+                                    f"{before_cap:,} values; a larger run would hang "
+                                    f"searching for a unique value",
+                                    f"widened to {_pattern_capacity(newpat):,} values",
+                                    pat, newpat)
+                        else:
+                            res.add(BLOCKING, where,
+                                    f"unique pattern '{pat}' cannot be widened "
+                                    f"automatically ({before_cap:,} values)",
+                                    "add more # placeholders by hand", pat)
+                    elif before_cap < 1000:
                         res.add(BLOCKING, where,
-                                f"unique pattern '{pat}' has too few possible values",
-                                "add # digits", pat)
+                                f"unique pattern '{pat}' can only produce "
+                                f"{before_cap:,} values", "add # digits", pat)
+                    else:
+                        # letters only, e.g. 'CRP-???' = 17,576 values: fine for a
+                        # dimension table, risky for a large one
+                        res.add(APPROX, where,
+                                f"unique pattern '{pat}' allows {before_cap:,} "
+                                f"values; safe for a small table, but a run larger "
+                                f"than that would hang",
+                                "add a # digit if this table can grow", pat)
 
             elif gen == "choice":
                 vals = [v for v in params.get("values", "").split(",") if v.strip()]
