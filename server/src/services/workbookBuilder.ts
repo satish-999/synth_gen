@@ -1,8 +1,14 @@
 import * as XLSX from "xlsx";
+import * as fs from "node:fs";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { AgentModelSpec, ModelColumn, ModelRule } from "./modelTypes.js";
 import type { AgentDiff } from "./diffService.js";
+
+// xlsx 0.20.x cannot reach the filesystem under ESM unless fs is bound
+// explicitly. Without this, XLSX.writeFile throws "cannot save file" before
+// touching disk, which breaks every CREATE and UPDATE draft.
+XLSX.set_fs(fs);
 
 const HEADERS = [
   "column_name", "dtype", "pk", "fk_ref", "fk_mode", "cardinality",
@@ -86,7 +92,9 @@ export function preserveBaseWorkbook(basePath: string, draftPath: string): void 
   const newNames = draft.SheetNames.filter(name => !name.startsWith('_') && !base.SheetNames.includes(name));
   for (const name of newNames) XLSX.utils.book_append_sheet(base, draft.Sheets[name], name);
   const rows = XLSX.utils.sheet_to_json<unknown[]>(base.Sheets._OBJECTS, { header: 1, defval: null });
-  for (const name of newNames) rows.push([name, 'TABLE', 'Added by model authoring agent']);
+  // Two columns, matching every other row in this sheet (writeWorkbook never
+  // writes a third). A mismatched row width here produces a ragged sheet.
+  for (const name of newNames) rows.push([name, 'TABLE']);
   base.Sheets._OBJECTS = XLSX.utils.aoa_to_sheet(rows);
   // Draft rules already include the unchanged base rules plus new-table rules.
   if (draft.Sheets._RULES) base.Sheets._RULES = draft.Sheets._RULES;
@@ -189,4 +197,4 @@ export function writeDiffCompare(
 ): void {
   const diff = computeDiff(baseSpec, newSpec, mode);
   writeFileSync(outputPath, JSON.stringify(diff, null, 2));
-}
+}

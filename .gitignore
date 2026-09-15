@@ -12,6 +12,7 @@ uploads/
 node_modules/
 client/node_modules/
 client/dist/
+server/dist/
 
 # Environment
 .env
