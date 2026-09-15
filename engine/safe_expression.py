@@ -8,6 +8,19 @@ BIN = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
 CMP = {ast.Eq: operator.eq, ast.NotEq: operator.ne, ast.Lt: operator.lt,
        ast.LtE: operator.le, ast.Gt: operator.gt, ast.GtE: operator.ge}
 
+# `**` is deliberately absent from BIN: unbounded exponentiation on Python's
+# arbitrary-precision ints (e.g. 9**9**9) can exhaust memory/CPU well before
+# any AST node-count limit kicks in. This check is a second, independent
+# layer: it still applies if `**` (or any other magnitude-growing operator)
+# is ever added to BIN by a future change, rather than relying solely on
+# what today's operator table happens to omit.
+MAX_INT_BITS = 4096  # ~1233 decimal digits; far beyond any real business figure
+
+def _bounded(value):
+    if isinstance(value, int) and not isinstance(value, bool) and value.bit_length() > MAX_INT_BITS:
+        raise ValueError('Model expression result is too large to compute safely.')
+    return value
+
 def safe_eval(frame, expression, **_ignored):
     if not isinstance(expression, str) or len(expression) > 4000:
         raise ValueError('Model expression must be text of at most 4000 characters.')
@@ -30,7 +43,7 @@ def safe_eval(frame, expression, **_ignored):
             left, right = run(node.left), run(node.right)
             if isinstance(left, str) or isinstance(right, str):
                 raise ValueError('String arithmetic is unsupported.')
-            return BIN[type(node.op)](left, right)
+            return _bounded(BIN[type(node.op)](left, right))
         if isinstance(node, ast.UnaryOp):
             value = run(node.operand)
             if isinstance(node.op, ast.USub): return -value
