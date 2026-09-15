@@ -12,6 +12,7 @@ services:
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-claude-sonnet-4-6}"
       PUBLIC_URL: "${PUBLIC_URL:-http://localhost:3080}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-}"
     volumes:
       - synthgen-data:/app/data
     restart: unless-stopped
