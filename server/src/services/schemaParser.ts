@@ -7,9 +7,38 @@ export interface ParsedColumn {
   dtype: "string" | "int" | "float" | "date" | "bool";
   nullable?: boolean;
   pk?: boolean;
+  fk_ref?: string;
+}
+
+/** Explicit Markdown data dictionaries can be read locally without an LLM. */
+export function parseMetadataMarkdown(text: string, filename: string): ParsedSchema[] | null {
+  if (!/^##\s+Table:\s*/mi.test(text)) return null;
+  const sections = text.split(/^##\s+Table:\s*/mi).slice(1);
+  const result: ParsedSchema[] = [];
+  for (const section of sections) {
+    const lines = section.split(/\r?\n/);
+    const tableName = lines.shift()!.trim();
+    if (!/^[a-z][a-z0-9_]*$/.test(tableName)) throw new Error(`${filename}: invalid table name ${tableName}.`);
+    const tableLines = lines.filter(line => line.trim().startsWith('|'));
+    const cells = (line: string) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+    if (tableLines.length < 3) throw new Error(`${tableName}: provide a Markdown column table.`);
+    const headers = cells(tableLines[0]);
+    if (headers.join(',') !== 'column_name,data_type,is_pk,fk_ref') throw new Error(`${tableName}: use column_name | data_type | is_pk | fk_ref headers.`);
+    const types: Record<string, ParsedColumn['dtype']> = {string:'string',int:'int',decimal:'float',date:'date',boolean:'bool'};
+    const columns = tableLines.slice(2).map(line => {
+      const [name, type, pk, fk] = cells(line);
+      if (!name || !types[type] || !['Y','N'].includes(pk)) throw new Error(`${tableName}.${name}: invalid metadata row. Types: string, int, decimal, date, boolean; is_pk: Y or N.`);
+      if (fk && fk !== '-' && !/^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/.test(fk)) throw new Error(`${tableName}.${name}: fk_ref must be table.column or -.`);
+      return {name,dtype:types[type],pk:pk === 'Y',nullable:false,fk_ref:fk && fk !== '-' ? fk : undefined};
+    });
+    if (result.some(s => s.tableName === tableName)) throw new Error(`Duplicate table ${tableName}.`);
+    result.push({tableName,columns,sourceFile:filename,format:'text'});
+  }
+  return result;
 }
 
 export interface ParsedSchema {
+  sourceText?: string;
   tableName: string;
   columns: ParsedColumn[];
   sourceFile: string;
@@ -90,14 +119,7 @@ export function parseDdl(content: string, filename: string): ParsedSchema[] {
       results.push({ tableName, columns, sourceFile: filename, format: "ddl" });
     }
   }
-  if (results.length === 0) {
-    results.push({
-      tableName: slugTableName(filename),
-      columns: [{ name: "id", dtype: "string" }],
-      sourceFile: filename,
-      format: "text",
-    });
-  }
+  if (results.length === 0) throw new Error(`${filename}: no supported CREATE TABLE statements found. Upload narrative metadata as .txt or .md.`);
   return results;
 }
 
@@ -190,4 +212,4 @@ export function parseSchemaFile(
             },
           ];
   }
-}
+}

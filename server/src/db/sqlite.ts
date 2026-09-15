@@ -100,3 +100,8 @@ export function findLastPassRun(modelKey: string, seed: number): RunRecord | und
 }
 
 export default db;
+
+/** Successful datasets, newest first; selection and compatibility are checked by the planner. */
+export function listPassRuns(): RunRecord[] {
+  return db.prepare("SELECT * FROM runs WHERE status = 'PASS' ORDER BY created_at DESC, run_id DESC").all() as unknown as RunRecord[];
+}

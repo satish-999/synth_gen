@@ -9,15 +9,16 @@ import {
   extendModelFromBase,
   type AgentModelSpec,
 } from "./ruleBasedAgent.js";
-import { writeWorkbook, writeManifest, writeDiffCompare } from "./workbookBuilder.js";
+import { writeWorkbook, writeManifest, writeDiffCompare, preserveBaseWorkbook } from "./workbookBuilder.js";
 import path from "node:path";
+import { assertAdditiveUpdate } from './updateGuard.js';
 
 async function callClaude(
   mode: "CREATE" | "UPDATE" | "REWRITE",
   schemas: ParsedSchema[],
   opts?: { domainHint?: string; baseSpec?: AgentModelSpec; familyId?: string; baseVersion?: number },
 ): Promise<AgentModelSpec> {
-  const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+  const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY, timeout: 120_000, maxRetries: 1 });
   const userPrompt = buildUserPrompt(schemas, {
     mode: mode === "UPDATE" ? "UPDATE" : undefined,
     baseSpec: opts?.baseSpec,
@@ -41,6 +42,8 @@ async function callClaude(
       messages: [{ role: "user", content: userPrompt + extra + retryBlock }],
     });
 
+    if (msg.stop_reason === 'max_tokens') throw new Error('The model response exceeded its output limit. Upload fewer tables per update.');
+
     const text = msg.content[0].type === "text" ? msg.content[0].text : "";
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("Agent did not return valid JSON");
@@ -55,7 +58,7 @@ async function callClaude(
       if (!retryErrors) {
         return request(validation.errors);
       }
-      spec.warnings.push(`Validation issues after retry: ${validation.errors.join("; ")}`);
+      throw new Error(`Model remains invalid after retry: ${validation.errors.join('; ')}`);
     }
     spec.warnings.unshift(`Built with Claude API (${mode}) — review before registering.`);
     return spec;
@@ -77,7 +80,7 @@ export async function generateCreateModel(
     try {
       return await callClaude("CREATE", schemas, { domainHint });
     } catch (e) {
-      console.warn("[agent] Claude failed, falling back to rule-based:", (e as Error).message);
+      throw new Error(`Claude model creation failed: ${(e as Error).message}`);
     }
   }
   return buildModelFromSchemas(schemas);
@@ -88,15 +91,20 @@ export async function generateUpdateModel(
   newSchemas: ParsedSchema[],
   familyId: string,
   baseVersion: number,
+  domainHint?: string,
 ): Promise<AgentModelSpec> {
   if (ANTHROPIC_API_KEY) {
     try {
-      return await callClaude("UPDATE", newSchemas, { baseSpec, familyId, baseVersion });
+      const next = await callClaude("UPDATE", newSchemas, { baseSpec, familyId, baseVersion, domainHint });
+      assertAdditiveUpdate(baseSpec, next);
+      return next;
     } catch (e) {
-      console.warn("[agent] Claude UPDATE failed, falling back:", (e as Error).message);
+      throw new Error(`Claude model update failed: ${(e as Error).message}`);
     }
   }
-  return extendModelFromBase(baseSpec, newSchemas);
+  const next = extendModelFromBase(baseSpec, newSchemas);
+  assertAdditiveUpdate(baseSpec, next);
+  return next;
 }
 
 export async function generateRewriteModel(
@@ -110,7 +118,7 @@ export async function generateRewriteModel(
     try {
       return await callClaude("REWRITE", schemas, { baseSpec, familyId, baseVersion, domainHint });
     } catch (e) {
-      console.warn("[agent] Claude REWRITE failed, falling back:", (e as Error).message);
+      throw new Error(`Claude model rewrite failed: ${(e as Error).message}`);
     }
   }
   const spec = buildModelFromSchemas(schemas);
@@ -121,15 +129,18 @@ export async function generateRewriteModel(
 export async function buildDraftWorkbook(
   spec: AgentModelSpec,
   draftDir: string,
-  opts?: { mode?: string; baseSpec?: AgentModelSpec | null },
+  opts?: { mode?: string; baseSpec?: AgentModelSpec | null; baseWorkbookPath?: string },
 ): Promise<{ workbookPath: string; manifestPath: string; diffPath: string }> {
   const mode = opts?.mode ?? "CREATE";
   const workbookPath = path.join(draftDir, "data_model.xlsx");
   const manifestPath = path.join(draftDir, "manifest.json");
   const diffPath = path.join(draftDir, "diff.json");
 
-  const { spec: normalized } = validateAndNormalize(spec);
+  const { spec: normalized, validation } = validateAndNormalize(spec);
+  if (!validation.ok) throw new Error(validation.errors.join('\n'));
+  if (mode === 'UPDATE' && opts?.baseSpec) assertAdditiveUpdate(opts.baseSpec, normalized);
   writeWorkbook(normalized, workbookPath);
+  if (mode === 'UPDATE' && opts?.baseWorkbookPath) preserveBaseWorkbook(opts.baseWorkbookPath, workbookPath);
   writeManifest(normalized, manifestPath);
   writeDiffCompare(opts?.baseSpec ?? null, normalized, diffPath, mode);
 
@@ -139,4 +150,4 @@ export async function buildDraftWorkbook(
   }
 
   return { workbookPath, manifestPath, diffPath };
-}
+}

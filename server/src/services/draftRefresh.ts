@@ -33,7 +33,7 @@ export async function refreshDraftArtifacts(draftDir: string): Promise<{
   for (const sheet of wb.SheetNames) {
     if (sheet.startsWith("_")) continue;
     const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sheet], { header: 1 });
-    colCounts[sheet] = Math.max(0, (rows[0] as unknown[])?.length ?? 0);
+    colCounts[sheet] = rows.slice(1).filter(row => row[0]).length;
   }
 
   const manifestFixed = {

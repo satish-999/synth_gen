@@ -11,6 +11,7 @@ import {
 import { fetchAgentJobs } from "./api-agent";
 import { FileDownloads } from "./components/FileDownloads";
 import { CreateModelModal } from "./components/CreateModelModal";
+import { AgentModelModal } from './components/AgentModelModal';
 import { EvolveModelModal } from "./components/EvolveModelModal";
 import { ModelPanel } from "./components/ModelPanel";
 import { ReviewPage } from "./components/ReviewPage";
@@ -52,6 +53,7 @@ export default function App() {
   const [history, setHistory] = useState<RunHistoryEntry[]>([]);
   const [stage, setStage] = useState<PipelineStage>("model");
   const [showCreate, setShowCreate] = useState(false);
+  const [showAgent, setShowAgent] = useState(false);
   const [evolveMode, setEvolveMode] = useState<"UPDATE" | "REWRITE" | null>(null);
   const [reviewJobId, setReviewJobId] = useState<string | null>(null);
   const [rerunBusy, setRerunBusy] = useState<string | null>(null);
@@ -205,6 +207,11 @@ export default function App() {
         />
 
         <main className="workspace">
+          <section className="card">
+            <h2>Create and extend models</h2>
+            <p className="hint">Turn metadata into a draft model, or add new tables to the selected model. Review every change before registering.</p>
+            <button className="go" onClick={() => setShowAgent(true)}>Open model authoring agent</button>
+          </section>
           {!active && (
             <section className="card">
               <p className="hint">Select a data model from the left panel.</p>
@@ -219,8 +226,8 @@ export default function App() {
                   Datasets — {modelLabel(active.family, active.version)}
                 </h2>
                 <p className="hint">
-                  Tables from this model only. Required FK parents are included
-                  automatically.{" "}
+                  Select the tables to generate. Required FK parents are loaded
+                  from compatible saved data.{" "}
                   <a
                     href={modelWorkbookUrl(active.family, active.version)}
                     download={`${active.family}_v${active.version}_data_model.xlsx`}
@@ -231,7 +238,7 @@ export default function App() {
                 {added.length > 0 && (
                   <p className="hint autonote">
                     FK parents ({added.join(", ")}) are not regenerated — reused from
-                    your last successful run with the same seed.
+                    a compatible successful run, including earlier model versions.
                   </p>
                 )}
                 <ObjectGrid
@@ -250,8 +257,8 @@ export default function App() {
                   </h2>
                   <p className="hint">
                     Row counts apply only to selected tables. For a subset run,
-                    generate all tables once with the same seed first so FK parents
-                    can be reused.
+                    saved parent data is reused when its definition matches this
+                    version. The seed controls newly generated data.
                   </p>
                   <OptionsPanel
                     picked={picked}
@@ -299,7 +306,7 @@ export default function App() {
               </h2>
               {result.referencedTables && result.referencedTables.length > 0 && (
                 <p className="hint autonote">
-                  Reused parent data (seed {seed}): {result.referencedTables.join(", ")}
+                  Reused existing parent data: {result.referencedTables.join(", ")}
                   {result.referencedFromRun ? ` — from run ${result.referencedFromRun}` : ""}
                 </p>
               )}
@@ -429,6 +436,8 @@ export default function App() {
         />
       )}
 
+      {showAgent && <AgentModelModal active={active} onClose={() => setShowAgent(false)} onDraft={id => { setShowAgent(false); setReviewJobId(id); }} />}
+
       {evolveMode && active && (
         <EvolveModelModal
           mode={evolveMode}
@@ -462,4 +471,4 @@ export default function App() {
       )}
     </>
   );
-}
+}

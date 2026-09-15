@@ -34,7 +34,7 @@ function isDependentChildTable(name: string): boolean {
 }
 
 function tablePkPrefix(tableName: string): string {
-  return tableName.replace(/_/g, "").toUpperCase().slice(0, 3);
+  return tableName.replace(/_/g, "").toUpperCase();
 }
 
 function isLikelyTablePk(colName: string, tableName: string): boolean {
@@ -414,6 +414,13 @@ function applyTemporalRules(tables: Record<string, ModelColumn[]>, rules: ModelR
 function buildTableColumns(schema: ParsedSchema): ModelColumn[] {
   const cols = schema.columns.map(bareColumn);
   designatePrimaryKey(cols, schema.tableName, schema.columns);
+  for (const source of schema.columns) {
+    if (!source.fk_ref) continue;
+    const column = cols.find(c => c.name === source.name)!;
+    column.fk_ref = source.fk_ref;
+    column.fk_mode = 'REFERENCE';
+    column.generator = null; column.params = null;
+  }
   return cols;
 }
 
@@ -470,6 +477,7 @@ export function buildModelFromSchemas(schemas: ParsedSchema[]): AgentModelSpec {
   const inferred_fks = inferFksForTables(tables, pkByTable);
   const warnings: string[] = [
     "Built with rule-based agent (no Claude API key). Review FKs before registering.",
+    'Generator ranges, categories and dates are local defaults. Review the workbook for business realism; narrative requirements outside structured metadata are not interpreted in local mode.',
   ];
 
   return finalizeModel({ tables, rules: [], inferred_fks, warnings });
@@ -504,13 +512,25 @@ export function extendModelFromBase(
     if (pk) pkByTable.set(name, pk.name);
   }
 
-  const newTableNames = new Set(newSchemas.map((s) => s.tableName).filter((n) => tables[n]));
+  const newTableNames = new Set(newSchemas.map((s) => s.tableName).filter((n) => !(n in baseSpec.tables)));
   const inferred_fks = inferFksForTables(tables, pkByTable, newTableNames);
 
-  return finalizeModel({
+  const extended = finalizeModel({
     tables,
     rules: [...baseSpec.rules],
     inferred_fks: [...baseSpec.inferred_fks, ...inferred_fks],
     warnings,
   });
+  // Finalization assigns generators and rules. Restore the immutable base after
+  // applying those defaults, and retain only rules for newly introduced tables.
+  for (const [name, columns] of Object.entries(baseSpec.tables)) extended.tables[name] = structuredClone(columns);
+  extended.rules = [...structuredClone(baseSpec.rules), ...extended.rules.filter(rule => newTableNames.has(rule.object))];
+  const ids = new Set(baseSpec.rules.map(rule => rule.rule_id));
+  for (const rule of extended.rules.slice(baseSpec.rules.length)) {
+    const original = rule.rule_id;
+    let suffix = 1;
+    while (ids.has(rule.rule_id)) rule.rule_id = `${original}_new${suffix++}`;
+    ids.add(rule.rule_id);
+  }
+  return extended;
 }

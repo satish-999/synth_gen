@@ -10,6 +10,8 @@ import argparse, json, re
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import yaml
+from safe_expression import safe_eval
 
 RESULTS = []
 
@@ -29,15 +31,30 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--snapshot", required=True)
     ap.add_argument("--data", required=True)
+    ap.add_argument("--config")
     a = ap.parse_args()
 
     model = json.loads(Path(a.snapshot).read_text())
     data = Path(a.data)
+    cfg = yaml.safe_load(Path(a.config).read_text()) if a.config else None
+    references = cfg.get("references", {}) if cfg else {}
+    if cfg:
+        # partial generation: only validate the tables that were actually in
+        # scope for this run (targets + tables referenced from prior runs),
+        # not the whole model
+        active = set(cfg["targets"]) | set(references)
+        model["tables"] = {t: cols for t, cols in model["tables"].items() if t in active}
+        model["rules"] = [r for r in model["rules"] if r["object"] in active]
     frames = {}
     for t in model["tables"]:
         f = data / f"{t}.csv"
+        if t in references:
+            f = Path(references[t]["path"])
+        elif not f.exists():
+            f = data / "_reference_data" / f"{t}.csv"
         if f.exists():
-            df = pd.read_csv(f)
+            string_cols = {c["name"]: "string" for c in model["tables"][t] if c["dtype"] in ("str", "string")}
+            df = pd.read_csv(f, dtype=string_cols)
             for c in df.columns:          # undo pandas' TRUE/FALSE -> bool parsing
                 if df[c].dtype == bool:
                     df[c] = df[c].map({True: "TRUE", False: "FALSE"})
@@ -138,14 +155,14 @@ def main():
             if g == "case":
                 conds, vals_, i = [], [], 1
                 while f"when{i}" in p:
-                    conds.append(df.eval(p[f"when{i}"], engine="python"))
+                    conds.append(safe_eval(df, p[f"when{i}"], engine="python"))
                     vals_.append(str(p[f"then{i}"])); i += 1
                 exp_case = np.select(conds, vals_, default=str(p.get("else", "")))
                 check(f"{t}.{n}: case logic holds",
                       (df[n].astype(str).str.upper().values ==
                        pd.Series(exp_case).str.upper().values).all())
             if g == "derived":
-                calc = np.round(pd.Series(df.eval(p["expr"])).astype(float), int(p.get("round", 2)))
+                calc = np.round(pd.Series(safe_eval(df, p["expr"])).astype(float), int(p.get("round", 2)))
                 ok = (abs(df[n] - calc) < 0.011).all()
                 check(f"{t}.{n}: = {p['expr']}", ok)
             if c["nullable_pct"] == 0 and not c["fk_ref"] and n not in pks:
@@ -182,13 +199,13 @@ def main():
         elif r["rule_type"] == "conditional":
             m = re.match(r"when (.+?) then (\w+) (NOT NULL|NULL)", d)
             cond, target, action = m.groups()
-            mask = df.eval(cond)
+            mask = safe_eval(df, cond)
             got = df.loc[mask, target]
             ok = got.notna().all() if action == "NOT NULL" else got.isna().all()
             check(f"RULE {r['rule_id']} ({t}): {d}", ok)
         elif r["rule_type"] == "derived":
             m = re.match(r"(\w+)\s*=\s*(.+)", d)
-            calc = np.round(pd.Series(df.eval(m.group(2))).astype(float), 2)
+            calc = np.round(pd.Series(safe_eval(df, m.group(2))).astype(float), 2)
             check(f"RULE {r['rule_id']} ({t}): {d}",
                   (abs(df[m.group(1)] - calc) < 0.011).all())
 
@@ -197,7 +214,7 @@ def main():
         m = re.match(r"count\((\w+)\)", expr)
         if m: return int(g[m.group(1)].count())
         m = re.match(r"sum\(case when (.+?) then 1 else 0 end\)", expr)
-        if m: return int(g.eval(m.group(1)).sum())
+        if m: return int(safe_eval(g, m.group(1)).sum())
         m = re.match(r"(sum|avg|min|max)\((\w+)\)", expr)
         if m:
             fn, col = m.groups()
@@ -225,7 +242,7 @@ def main():
             j = j.merge(nd, left_on=cc, right_on=nc, how="inner", suffixes=("", "_r"))
             joined.add(nt)
         if spec.get("filter_logic"):
-            j = j.query(spec["filter_logic"])
+            j = j.loc[safe_eval(j, spec["filter_logic"])]
         gb = [c.strip() for c in (spec.get("group_by") or "").split(",") if c.strip()]
         if not gb:                       # pass-through view: filtered rows, no grouping
             exp = j[[c["name"] for c in spec["columns"] if c["name"] in j.columns]]
@@ -246,7 +263,7 @@ def main():
         for c in spec["columns"]:
             if c["derivation"].startswith("round("):
                 m = re.match(r"round\((.+),\s*(\d+)\)", c["derivation"])
-                exp[c["name"]] = np.round(exp.eval(m.group(1)), int(m.group(2)))
+                exp[c["name"]] = np.round(safe_eval(exp, m.group(1)), int(m.group(2)))
         exp = exp[[c["name"] for c in spec["columns"]]].sort_values(gb).reset_index(drop=True)
         got = pd.read_csv(f)
         if got.empty or exp.empty:

@@ -11,7 +11,7 @@ import {
   generateRewriteModel,
   buildDraftWorkbook,
 } from "../services/agentService.js";
-import { readWorkbook } from "../services/workbookBuilder.js";
+import { readWorkbook, writeDiffCompare } from "../services/workbookBuilder.js";
 import {
   getAgentJob,
   insertAgentJob,
@@ -20,9 +20,11 @@ import {
 } from "../db/agentJobs.js";
 import { registerVersion, getFamily, workbookPath, resolveModelRef } from "../services/registryService.js";
 import { enrichDiff, type AgentDiff } from "../services/diffService.js";
-import { refreshDraftArtifacts, loadDiff } from "../services/draftRefresh.js";
+import { refreshDraftArtifacts, loadDiff, validateDraftWorkbook } from "../services/draftRefresh.js";
 import { runPython } from "../utils/python.js";
 import { MODEL_OBJECTS } from "../config.js";
+import { readMetadataFiles, allowedMetadataExtensions } from '../services/metadataInput.js';
+import { assertAdditiveUpdate } from '../services/updateGuard.js';
 
 mkdirSync(UPLOADS_PATH, { recursive: true });
 mkdirSync(DRAFTS_PATH, { recursive: true });
@@ -64,20 +66,13 @@ function jobResponse(job: NonNullable<ReturnType<typeof getAgentJob>>, objects?:
 
 function copySchemaFiles(files: Express.Multer.File[], draftDir: string): void {
   for (const f of files) {
-    const dest = path.join(draftDir, "source_schemas", f.originalname);
+    const dest = path.join(draftDir, "source_schemas", path.basename(f.originalname.replace(/\\/g, '/')));
     mkdirSync(path.dirname(dest), { recursive: true });
     copyFileSync(f.path, dest);
   }
 }
 
-function parseUploadedSchemas(files: Express.Multer.File[]) {
-  const schemas = files.flatMap((f) => {
-    const buf = readFileSync(f.path);
-    return parseSchemaFile(f.originalname, buf);
-  });
-  if (schemas.length === 0) throw new Error("No tables found in uploaded schemas");
-  return schemas;
-}
+const parseUploadedSchemas = readMetadataFiles;
 
 async function processCreateJob(
   jobId: string,
@@ -86,7 +81,7 @@ async function processCreateJob(
 ): Promise<void> {
   updateAgentJob(jobId, { status: "RUNNING" });
   try {
-    const schemas = parseUploadedSchemas(files);
+    const schemas = await parseUploadedSchemas(files);
     const spec = await generateCreateModel(schemas, domainHint);
     const draftDir = path.join(DRAFTS_PATH, jobId);
     mkdirSync(draftDir, { recursive: true });
@@ -115,6 +110,7 @@ async function processUpdateJob(
   familyId: string,
   baseVersion: number,
   files: Express.Multer.File[],
+  domainHint?: string,
 ): Promise<void> {
   updateAgentJob(jobId, { status: "RUNNING" });
   try {
@@ -122,8 +118,8 @@ async function processUpdateJob(
     if (!existsSync(baseWb)) throw new Error(`Base model ${familyId} v${baseVersion} not found`);
 
     const baseSpec = readWorkbook(baseWb);
-    const newSchemas = parseUploadedSchemas(files);
-    const spec = await generateUpdateModel(baseSpec, newSchemas, familyId, baseVersion);
+    const newSchemas = await parseUploadedSchemas(files);
+    const spec = await generateUpdateModel(baseSpec, newSchemas, familyId, baseVersion, domainHint);
 
     const draftDir = path.join(DRAFTS_PATH, jobId);
     mkdirSync(draftDir, { recursive: true });
@@ -132,6 +128,7 @@ async function processUpdateJob(
     const { manifestPath, diffPath } = await buildDraftWorkbook(spec, draftDir, {
       mode: "UPDATE",
       baseSpec,
+      baseWorkbookPath: baseWb,
     });
 
     updateAgentJob(jobId, {
@@ -164,7 +161,7 @@ async function processRewriteJob(
     if (!existsSync(baseWb)) throw new Error(`Base model ${familyId} v${baseVersion} not found`);
 
     const baseSpec = readWorkbook(baseWb);
-    const schemas = parseUploadedSchemas(files);
+    const schemas = await parseUploadedSchemas(files);
     const spec = await generateRewriteModel(schemas, baseSpec, familyId, baseVersion, domainHint);
 
     const draftDir = path.join(DRAFTS_PATH, jobId);
@@ -208,6 +205,8 @@ router.post("/agent/jobs", upload.array("schemas", 20), async (req, res) => {
 
   const files = req.files as Express.Multer.File[] | undefined;
   if (!files?.length) return res.status(400).json({ error: "Upload at least one schema file." });
+  if (files.some(f => !allowedMetadataExtensions.has(path.extname(f.originalname).toLowerCase()))) return res.status(400).json({ error: 'Supported uploads: Excel, SQL, JSON, CSV, PDF, DOCX, TXT and Markdown.' });
+  if ((domainHint?.length ?? 0) > 10_000) return res.status(400).json({ error: 'Instructions must be under 10,000 characters.' });
 
   if (mode === "CREATE") {
     if (getFamily(familyId)) {
@@ -248,7 +247,7 @@ router.post("/agent/jobs", upload.array("schemas", 20), async (req, res) => {
   });
 
   if (mode === "CREATE") void processCreateJob(jobId, files, domainHint);
-  else if (mode === "UPDATE") void processUpdateJob(jobId, familyId, baseVersion!, files);
+  else if (mode === "UPDATE") void processUpdateJob(jobId, familyId, baseVersion!, files, domainHint);
   else void processRewriteJob(jobId, familyId, baseVersion!, files, domainHint);
 
   res.status(202).json({ jobId, status: "PENDING", mode, familyId, baseVersion, displayName });
@@ -268,6 +267,10 @@ router.get("/agent/jobs", (_req, res) => {
     error: j.error,
   }));
   res.json({ jobs });
+});
+
+router.get('/agent/capabilities', (_req, res) => {
+  res.json({ aiConfigured: Boolean(ANTHROPIC_API_KEY), provider: 'Claude', structuredFormats: ['xlsx', 'xls', 'sql', 'ddl', 'json', 'csv'], documentFormats: ['pdf', 'docx', 'txt', 'md'] });
 });
 
 router.get("/agent/jobs/:id", async (req, res) => {
@@ -320,11 +323,18 @@ router.put("/agent/jobs/:id/draft", draftUpload.single("workbook"), async (req, 
   if (!file) return res.status(400).json({ error: "Upload workbook file as 'workbook'." });
 
   const dest = path.join(job.draft_path!, "data_model.xlsx");
-  copyFileSync(file.path, dest);
 
   try {
+    await validateDraftWorkbook(file.path);
+    const baseSpec = job.base_version == null ? null : readWorkbook(workbookPath(job.family_id!, job.base_version));
+    const nextSpec = readWorkbook(file.path);
+    if (job.mode === 'UPDATE' && baseSpec) assertAdditiveUpdate(baseSpec, nextSpec);
+    nextSpec.inferred_fks = Object.entries(nextSpec.tables).flatMap(([table, columns]) => columns.filter(c => c.fk_ref && !baseSpec?.tables[table]?.some(old => old.name === c.name && old.fk_ref === c.fk_ref)).map(c => ({column:`${table}.${c.name}`,fk_ref:c.fk_ref!,confidence:'MEDIUM' as const,reason:'Relationship in edited draft; confirm before registration.'})));
+    copyFileSync(file.path, dest);
+    const diffPath = path.join(job.draft_path!, 'diff.json');
+    writeDiffCompare(baseSpec, nextSpec, diffPath, job.mode);
     const { manifest, objects } = await refreshDraftArtifacts(job.draft_path!);
-    updateAgentJob(job.job_id, { manifest, status: "DRAFT_READY" });
+    updateAgentJob(job.job_id, { manifest, diff: readFileSync(diffPath, 'utf8'), status: "DRAFT_READY" });
     const updated = getAgentJob(job.job_id)!;
     res.json(jobResponse(updated, objects));
   } catch (e) {
@@ -362,6 +372,9 @@ router.post("/agent/jobs/:id/approve", async (req, res) => {
 
   try {
     await refreshDraftArtifacts(job.draft_path!);
+    if (job.mode === 'UPDATE' && job.base_version != null) {
+      assertAdditiveUpdate(readWorkbook(workbookPath(job.family_id!, job.base_version)), readWorkbook(wb));
+    }
 
     const mode = (job.mode ?? "CREATE") as "CREATE" | "UPDATE" | "REWRITE";
     const baseVersion = job.base_version ?? undefined;
@@ -414,4 +427,4 @@ router.post("/agent/jobs/:id/reject", (req, res) => {
   res.json({ status: "REJECTED" });
 });
 
-export default router;
+export default router;

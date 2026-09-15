@@ -1,6 +1,7 @@
 import archiver from "archiver";
 import { createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { randomUUID } from 'node:crypto';
 import { SYNTHGEN, VALIDATE, RUNS_PATH } from "../config.js";
 import { runPython } from "../utils/python.js";
 import { buildConfig, type OutputFormat } from "./configBuilder.js";
@@ -9,6 +10,7 @@ export type { OutputFormat } from "./configBuilder.js";
 import { getModelObjects, resolveDependencies } from "./modelService.js";
 import { insertRun, updateRun } from "../db/sqlite.js";
 import { planPartialGeneration } from "./generationPlan.js";
+import { validateGenerationLimits, withGenerationSlot } from './generationLimits.js';
 
 export interface GenerateRequest {
   modelKey: string;
@@ -44,7 +46,7 @@ export interface GenerateResult {
 }
 
 function runId(): string {
-  return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z") + '_' + randomUUID().slice(0, 8);
 }
 
 /** Parse validate_compliance.py stdout into structured checks. */
@@ -76,6 +78,11 @@ function producedFiles(dir: string): string[] {
 }
 
 export async function generate(req: GenerateRequest): Promise<GenerateResult> {
+  validateGenerationLimits(req.selectedTables, req.requestedRows, req.seed);
+  return withGenerationSlot(() => generateDataset(req));
+}
+
+async function generateDataset(req: GenerateRequest): Promise<GenerateResult> {
   const id = runId();
   const outputDir = path.join(RUNS_PATH, `run_${id}`);
   mkdirSync(outputDir, { recursive: true });
@@ -161,7 +168,7 @@ export async function generate(req: GenerateRequest): Promise<GenerateResult> {
   if (!snapshot) {
     throw new Error("No model snapshot produced by generation.");
   }
-  const val = await runPython(VALIDATE, ["--snapshot", snapshot, "--data", outputDir]);
+  const val = await runPython(VALIDATE, ["--snapshot", snapshot, "--data", outputDir, "--config", configPath]);
   const checks = parseCompliance(val.stdout);
   const passed = val.code === 0;
 
@@ -201,4 +208,4 @@ export function zipRun(outputDir: string, res: NodeJS.WritableStream): void {
 
 export function runOutputDir(id: string): string {
   return path.join(RUNS_PATH, `run_${id}`);
-}
+}

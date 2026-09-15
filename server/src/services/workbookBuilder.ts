@@ -50,6 +50,8 @@ export function readWorkbook(inputPath: string): AgentModelSpec {
 
   for (const sheet of wb.SheetNames) {
     if (sheet.startsWith("_")) continue;
+    const objects = wb.Sheets._OBJECTS ? XLSX.utils.sheet_to_json<Record<string, unknown>>(wb.Sheets._OBJECTS) : [];
+    if (objects.some(o => o.object_name === sheet && o.object_type === 'VIEW')) continue;
     const rows = XLSX.utils.sheet_to_json<(string | number | null)[]>(wb.Sheets[sheet], {
       header: 1,
       defval: null,
@@ -77,8 +79,22 @@ export function readWorkbook(inputPath: string): AgentModelSpec {
   return { tables, rules, inferred_fks: [], warnings: [] };
 }
 
+/** Keep original table sheets, guide, views and authoring metadata on additive updates. */
+export function preserveBaseWorkbook(basePath: string, draftPath: string): void {
+  const base = XLSX.read(readFileSync(basePath), { type: 'buffer', cellStyles: true });
+  const draft = XLSX.read(readFileSync(draftPath), { type: 'buffer', cellStyles: true });
+  const newNames = draft.SheetNames.filter(name => !name.startsWith('_') && !base.SheetNames.includes(name));
+  for (const name of newNames) XLSX.utils.book_append_sheet(base, draft.Sheets[name], name);
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(base.Sheets._OBJECTS, { header: 1, defval: null });
+  for (const name of newNames) rows.push([name, 'TABLE', 'Added by model authoring agent']);
+  base.Sheets._OBJECTS = XLSX.utils.aoa_to_sheet(rows);
+  // Draft rules already include the unchanged base rules plus new-table rules.
+  if (draft.Sheets._RULES) base.Sheets._RULES = draft.Sheets._RULES;
+  XLSX.writeFile(base, draftPath);
+}
+
 function tableSignature(cols: ModelColumn[]): string {
-  return cols.map((c) => `${c.name}:${c.dtype}:${c.pk ? "pk" : ""}:${c.fk_ref ?? ""}`).join("|");
+  return JSON.stringify(cols);
 }
 
 export function computeDiff(
@@ -173,4 +189,4 @@ export function writeDiffCompare(
 ): void {
   const diff = computeDiff(baseSpec, newSpec, mode);
   writeFileSync(outputPath, JSON.stringify(diff, null, 2));
-}
+}

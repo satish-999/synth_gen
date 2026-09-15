@@ -25,6 +25,7 @@ function tablePkMap(spec: AgentModelSpec): Map<string, string> {
 
 /** Auto-fix common agent mistakes before validation. */
 export function normalizeAgentModel(spec: AgentModelSpec): AgentModelSpec {
+  spec = structuredClone(spec);
   const pkMap = tablePkMap(spec);
   const warnings = [...(spec.warnings ?? [])];
 
@@ -39,26 +40,16 @@ export function normalizeAgentModel(spec: AgentModelSpec): AgentModelSpec {
         if (!col.fk_mode) col.fk_mode = "REFERENCE";
       }
       if (col.pk) {
-        col.fk_ref = null;
-        col.fk_mode = null;
         col.nullable_pct = 0;
-        col.unique = true;
-        if (!col.generator) col.generator = "pattern";
+        if (cols.filter(c => c.pk).length === 1) col.unique = true;
+        if (!col.generator && !col.fk_ref) col.generator = "pattern";
       }
     }
 
     const sizing = cols.filter((c) => c.fk_mode === "SIZING");
-    if (sizing.length > 1) {
-      for (let i = 1; i < sizing.length; i++) {
-        sizing[i].fk_mode = "REFERENCE";
-        sizing[i].cardinality = null;
-      }
-    }
+    // Conflicting structural parents require review; do not silently rewrite them.
     for (const col of cols) {
-      if (col.fk_mode === "SIZING" && !col.cardinality) {
-        col.cardinality = isLineTable(tableName) ? "1,15,poisson(3)" : "0,60,poisson(8)";
-        col.orphan_pct = isLineTable(tableName) ? 0 : 0.05;
-      }
+      if (col.fk_mode === 'SIZING' && !col.cardinality) warnings.push(`${tableName}.${col.name}: specify child cardinality.`);
     }
   }
 
@@ -93,10 +84,12 @@ export function validateAgentModel(spec: AgentModelSpec): ValidationResult {
   for (const [tableName, cols] of Object.entries(spec.tables)) {
     const pks = cols.filter((c) => c.pk);
     if (pks.length === 0) errors.push(`${tableName}: no PK column.`);
-    if (pks.length > 1) errors.push(`${tableName}: multiple PK columns marked.`);
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(tableName)) errors.push(`${tableName}: table names must be letters, numbers and underscores, starting with a letter.`);
+    if (tableName.length > 31) errors.push(`${tableName}: Excel sheet names are limited to 31 characters.`);
+    if (new Set(cols.map(c => c.name)).size !== cols.length) errors.push(`${tableName}: duplicate column names.`);
 
     for (const pk of pks) {
-      if (pk.generator !== "pattern") errors.push(`${tableName}.${pk.name}: PK must use pattern generator.`);
+      if (!pk.fk_ref && !['pattern', 'sequence'].includes(pk.generator ?? '')) errors.push(`${tableName}.${pk.name}: use a pattern or sequence for generated keys.`);
       const pref = pkPrefix(pk);
       if (pref) {
         const other = prefixes.get(pref);
@@ -111,6 +104,12 @@ export function validateAgentModel(spec: AgentModelSpec): ValidationResult {
     if (sizing.length > 1) errors.push(`${tableName}: more than one SIZING FK.`);
 
     for (const col of cols) {
+      const label = `${tableName}.${col.name}`;
+      if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(col.name)) errors.push(`${label}: invalid column name.`);
+      for (const value of [col.nullable_pct, col.orphan_pct]) if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) errors.push(`${label}: null/orphan fractions must be between 0 and 1.`);
+      if (col.params != null && typeof col.params !== 'string') { errors.push(`${label}: params must be a semicolon-separated string.`); continue; }
+      if (!col.fk_ref && !['pattern','sequence','faker','choice','numeric','date','date_offset','fk_lookup','fk_lookup_jitter','derived','case'].includes(col.generator ?? '')) errors.push(`${label}: unsupported or missing generator ${col.generator}.`);
+      if (col.fk_ref && !['SIZING','REFERENCE'].includes(col.fk_mode ?? '')) errors.push(`${label}: invalid FK mode.`);
       if (col.fk_ref) {
         if (col.generator != null && col.generator !== "") {
           errors.push(`${tableName}.${col.name}: FK column must have generator=null (got ${col.generator}).`);
@@ -118,8 +117,7 @@ export function validateAgentModel(spec: AgentModelSpec): ValidationResult {
         const [pt, pc] = col.fk_ref.split(".");
         const parentPk = pkMap.get(pt);
         if (!parentPk) {
-          const hasUnresolved = warnings.some((w) => w.startsWith("UNRESOLVED FK:") && w.includes(`${tableName}.${col.name}`));
-          if (!hasUnresolved) errors.push(`${tableName}.${col.name}: fk_ref parent ${pt} not found.`);
+          errors.push(`${tableName}.${col.name}: fk_ref parent ${pt} not found. Include its schema or extend an existing model containing it.`);
         } else if (parentPk !== pc) {
           errors.push(`${tableName}.${col.name}: fk_ref points to ${pc} but ${pt} PK is ${parentPk}.`);
         }
@@ -150,10 +148,24 @@ export function validateAgentModel(spec: AgentModelSpec): ValidationResult {
     }
   }
 
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (table: string) => {
+    if (visiting.has(table)) { errors.push(`Circular foreign-key dependency at ${table}.`); return; }
+    if (visited.has(table)) return;
+    visiting.add(table);
+    for (const col of spec.tables[table] ?? []) if (col.fk_ref) visit(col.fk_ref.split('.')[0]);
+    visiting.delete(table); visited.add(table);
+  };
+  Object.keys(spec.tables).forEach(visit);
+
   return { ok: errors.length === 0, errors, warnings };
 }
 
 export function validateAndNormalize(spec: AgentModelSpec): { spec: AgentModelSpec; validation: ValidationResult } {
+  if (!spec || !spec.tables || Array.isArray(spec.tables) || typeof spec.tables !== 'object' || Object.values(spec.tables).some(cols => !Array.isArray(cols) || cols.some(c => !c || typeof c.name !== 'string'))) {
+    throw new Error('Invalid model structure: tables must map names to column arrays.');
+  }
   let normalized = normalizeAgentModel(spec);
   let validation = validateAgentModel(normalized);
   if (!validation.ok) {
@@ -165,4 +177,4 @@ export function validateAndNormalize(spec: AgentModelSpec): { spec: AgentModelSp
     spec: { ...normalized, warnings: mergedWarnings },
     validation,
   };
-}
+}
