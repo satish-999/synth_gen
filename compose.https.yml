@@ -1,0 +1,30 @@
+# Run with: docker compose -f docker-compose.yml -f compose.https.yml up -d --build
+services:
+  synthgen:
+    environment:
+      PUBLIC_URL: "https://${SYNTHGEN_DOMAIN:?Set the public DNS hostname}"
+  proxy:
+    image: caddy:2-alpine
+    environment:
+      SYNTHGEN_DOMAIN: "${SYNTHGEN_DOMAIN:?Set the public DNS hostname}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      synthgen:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy-data:
+  caddy-config:

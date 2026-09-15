@@ -2,21 +2,24 @@ services:
   synthgen:
     build: .
     ports:
-      - "3080:3080"
-    env_file:
-      - server/.env.production
+      - "127.0.0.1:3080:3080"
     environment:
       HOST: "0.0.0.0"
       PORT: "3080"
-      PUBLIC_URL: "http://localhost:3080"
+      NODE_ENV: "production"
+      BASIC_AUTH_USER: "${BASIC_AUTH_USER:?Set BASIC_AUTH_USER}"
+      BASIC_AUTH_PASS: "${BASIC_AUTH_PASS:?Set a strong BASIC_AUTH_PASS}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-claude-sonnet-4-6}"
+      PUBLIC_URL: "${PUBLIC_URL:-http://localhost:3080}"
     volumes:
       - synthgen-data:/app/data
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3080/api/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
-  synthgen-data:
+  synthgen-data:

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from safe_expression import safe_eval
 import yaml
 from faker import Faker
 from openpyxl import load_workbook
@@ -242,7 +243,7 @@ class Engine:
                 deferred_case.append(c)          # evaluate AFTER rules
                 df[cn] = ""                        # placeholder keeps column order
             elif c["generator"] == "derived":
-                df[cn] = np.round(pd.Series(df.eval(p["expr"])).astype(float), int(p.get("round", 2)))
+                df[cn] = np.round(pd.Series(safe_eval(df, p["expr"])).astype(float), int(p.get("round", 2)))
             else:
                 fn = getattr(self, f"gen_{c['generator']}")
                 vals = list(fn(p, n))
@@ -270,7 +271,7 @@ class Engine:
         for c in deferred_case:                   # case logic sees final, rule-adjusted values
             p, conds, vals, i = c["params"], [], [], 1
             while f"when{i}" in p:
-                conds.append(df.eval(p[f"when{i}"], engine="python"))
+                conds.append(safe_eval(df, p[f"when{i}"], engine="python"))
                 vals.append(str(p[f"then{i}"])); i += 1
             df[c["name"]] = np.select(conds, vals, default=str(p.get("else", "")))
         self.frames[name] = df[[c["name"] for c in cols]]   # model-declared order
@@ -291,7 +292,7 @@ class Engine:
             elif r["rule_type"] == "conditional":
                 m = re.match(r"when (.+?) then (\w+) (NOT NULL|NULL)", d)
                 cond, target, action = m.groups()
-                mask = df.eval(cond)
+                mask = safe_eval(df, cond)
                 if action == "NULL":
                     df.loc[mask, target] = pd.NaT
                 else:
@@ -310,7 +311,7 @@ class Engine:
                     df.loc[viol, col] = df.loc[viol, floor] + bump
             elif r["rule_type"] == "derived":
                 m = re.match(r"(\w+)\s*=\s*(.+)", d)
-                df[m.group(1)] = np.round(df.eval(m.group(2)), 2)
+                df[m.group(1)] = np.round(safe_eval(df, m.group(2)), 2)
 
     # ---- views: computed, never fabricated -----------------------------------
     def materialize_view(self, name):
@@ -326,7 +327,7 @@ class Engine:
                           how="inner", suffixes=("", "_r"))
             joined.add(new_t)
         if spec.get("filter_logic"):
-            df = df.query(str(spec["filter_logic"]))
+            df = df.loc[safe_eval(df, str(spec["filter_logic"]))]
 
         gb = [c.strip() for c in (spec.get("group_by") or "").split(",") if c.strip()]
         AGG = re.compile(r"^(count|sum|avg|min|max)\(")
@@ -351,7 +352,7 @@ class Engine:
             return
         for c in post_cols:
             inner = re.match(r"round\((.+),\s*(\d+)\)", c["derivation"])
-            out[c["name"]] = np.round(out.eval(inner.group(1)),
+            out[c["name"]] = np.round(safe_eval(out, inner.group(1)),
                                       int(inner.group(2)))
         self.frames[name] = out[[c for c in want if c in out.columns]]
 
@@ -362,7 +363,7 @@ def eval_agg(expr, g):
         return int(g[m.group(1)].count())
     m = re.match(r"sum\(case when (.+?) then 1 else 0 end\)", expr)
     if m:
-        return int(g.eval(m.group(1)).sum())
+        return int(safe_eval(g, m.group(1)).sum())
     m = re.match(r"(sum|avg|min|max)\((\w+)\)", expr)
     if m:
         fn, col = m.groups()

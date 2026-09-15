@@ -6,29 +6,24 @@
 #   - the Python engine source was never copied (only requirements.txt), so
 #     synthgen.py / validate_compliance.py / normalize_model.py did not exist
 #     inside the container and every generation would fail
-#   - `npm ci --omit=dev` dropped tsx, then `npx tsx` tried to download it from
-#     the network at container start
+#   - server is compiled ahead of time (tsc -> dist/) and run with plain
+#     `node`, instead of transpiling with tsx at container start
 #   - client/dist had to be pre-built on the host; it is now built from source
 #   - runs as a non-root user, has a healthcheck, and data lives on a volume
 # ---------------------------------------------------------------------------
 
-# ---------- stage 1: build the front end from source ------------------------
-FROM node:22-bookworm-slim AS client-build
-WORKDIR /build
-COPY client/package.json client/package-lock.json* ./
-RUN npm ci
-COPY client/ ./
-RUN npm run build          # produces /build/dist
+# ---------- stage 1: build server + client from source -----------------------
+FROM node:22-bookworm-slim AS build
+WORKDIR /app
+COPY server/package*.json ./server/
+COPY client/package*.json ./client/
+RUN cd server && npm ci && cd ../client && npm ci
+COPY server/ ./server/
+COPY client/ ./client/
+RUN cd server && npx tsc && cd ../client && npm run build
+RUN cd server && npm prune --omit=dev
 
-# ---------- stage 2: install server dependencies ----------------------------
-FROM node:22-bookworm-slim AS server-deps
-WORKDIR /build
-COPY server/package.json server/package-lock.json* ./
-# full install (not --omit=dev): tsx is the runtime launcher and must be present
-# in the image rather than fetched at startup
-RUN npm ci
-
-# ---------- stage 3: runtime ------------------------------------------------
+# ---------- stage 2: runtime ------------------------------------------------
 FROM node:22-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -46,14 +41,13 @@ RUN python3 -m venv /app/engine/.venv \
 # THE ENGINE SOURCE ITSELF — this is what the previous image was missing
 COPY engine/ ./engine/
 
-# server dependencies from the deps stage, then server source
-COPY --from=server-deps /build/node_modules ./server/node_modules
-COPY server/package.json server/package-lock.json* ./server/
-COPY server/src/ ./server/src/
-COPY server/tsconfig.json ./server/
+# compiled server + its production node_modules from the build stage
+COPY --from=build /app/server/package.json ./server/package.json
+COPY --from=build /app/server/node_modules ./server/node_modules
+COPY --from=build /app/server/dist ./server/dist
 
-# front end built in stage 1
-COPY --from=client-build /build/dist ./client/dist
+# front end built in the same stage
+COPY --from=build /app/client/dist ./client/dist
 
 COPY docs/ ./docs/
 
@@ -88,5 +82,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD curl -fsS "http://127.0.0.1:${PORT}/api/health" || exit 1
 
 WORKDIR /app/server
-# call the local binary directly: deterministic, and never resolves over the network
-CMD ["./node_modules/.bin/tsx", "src/index.ts"]
+CMD ["node", "dist/index.js"]

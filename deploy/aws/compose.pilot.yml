@@ -1,0 +1,9 @@
+services:
+  synthgen:
+    image: synthgen-pilot
+    mem_limit: 1g
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

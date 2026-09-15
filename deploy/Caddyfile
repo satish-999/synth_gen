@@ -1,0 +1,4 @@
+{$SYNTHGEN_DOMAIN} {
+    encode gzip
+    reverse_proxy synthgen:3080
+}
