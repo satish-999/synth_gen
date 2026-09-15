@@ -1,0 +1,51 @@
+# Keeps secrets, host-built artefacts and private runtime data out of the image.
+# Without this, .env files and local node_modules are baked into image layers.
+
+# secrets and local configuration
+.env
+.env.*
+!.env.example
+!.env.production.example
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.production.example
+
+# version control and editor state
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# dependencies are installed inside the image, never copied from the host
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+
+# host build output (the image builds the client itself)
+client/dist
+server/dist
+**/*.tsbuildinfo
+
+# private runtime data — models, generated datasets, uploads, job database
+data/
+runs/
+uploads/
+registry/
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+
+# scratch files seen in the repository
+server/tmp-*.json
+work/
+Design docs/
+
+# local packaging and docs that do not belong in a server image
+*.zip
+*.log
+Install-SynthGen.ps1
+Start-SynthGen.ps1
