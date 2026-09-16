@@ -2,7 +2,7 @@ import * as XLSX from "xlsx";
 import * as fs from "node:fs";
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import type { AgentModelSpec, ModelColumn, ModelRule } from "./modelTypes.js";
+import type { AgentModelSpec, ModelColumn, ModelRule, ModelView, ModelViewColumn } from "./modelTypes.js";
 import type { AgentDiff } from "./diffService.js";
 
 // xlsx 0.20.x cannot reach the filesystem under ESM unless fs is bound
@@ -48,20 +48,58 @@ function rowToCol(row: (string | number | null)[]): ModelColumn {
   };
 }
 
+/**
+ * Parse a VIEW sheet exactly the way engine/synthgen.py's parse_workbook()
+ * does: header-block key/value rows (source_objects, join_logic,
+ * filter_logic, group_by) until a row whose first cell is literally
+ * "column_name", then one row per output column. There is no end-of-section
+ * marker in either implementation — keep both in sync.
+ */
+function parseViewSheet(rows: (string | number | null)[][]): ModelView {
+  const spec: Record<string, string> = {};
+  const columns: ModelViewColumn[] = [];
+  let inCols = false;
+  for (const row of rows) {
+    if (row[0] === "column_name") {
+      inCols = true;
+      continue;
+    }
+    if (!inCols && row[0]) {
+      spec[String(row[0])] = row[1] != null ? String(row[1]) : "";
+    } else if (inCols && row[0]) {
+      columns.push({ name: String(row[0]), dtype: String(row[1] ?? "string"), derivation: String(row[2] ?? "") });
+    }
+  }
+  return {
+    source_objects: spec.source_objects ?? "",
+    join_logic: spec.join_logic || null,
+    filter_logic: spec.filter_logic || null,
+    group_by: spec.group_by || null,
+    columns,
+  };
+}
+
 /** Load a registered or draft workbook back into AgentModelSpec. */
 export function readWorkbook(inputPath: string): AgentModelSpec {
   const wb = XLSX.read(readFileSync(inputPath), { type: "buffer" });
   const tables: Record<string, ModelColumn[]> = {};
+  const views: Record<string, ModelView> = {};
   const rules: ModelRule[] = [];
+
+  const objects = wb.Sheets._OBJECTS ? XLSX.utils.sheet_to_json<Record<string, unknown>>(wb.Sheets._OBJECTS) : [];
+  const objectType = (sheet: string): string | undefined =>
+    objects.find((o) => o.object_name === sheet)?.object_type as string | undefined;
 
   for (const sheet of wb.SheetNames) {
     if (sheet.startsWith("_")) continue;
-    const objects = wb.Sheets._OBJECTS ? XLSX.utils.sheet_to_json<Record<string, unknown>>(wb.Sheets._OBJECTS) : [];
-    if (objects.some(o => o.object_name === sheet && o.object_type === 'VIEW')) continue;
     const rows = XLSX.utils.sheet_to_json<(string | number | null)[]>(wb.Sheets[sheet], {
       header: 1,
       defval: null,
     });
+    if (objectType(sheet) === "VIEW") {
+      views[sheet] = parseViewSheet(rows);
+      continue;
+    }
     if (rows.length < 2) continue;
     tables[sheet] = rows.slice(1).map(rowToCol).filter((c) => c.name);
   }
@@ -82,7 +120,7 @@ export function readWorkbook(inputPath: string): AgentModelSpec {
     }
   }
 
-  return { tables, rules, inferred_fks: [], warnings: [] };
+  return { tables, rules, inferred_fks: [], warnings: [], ...(Object.keys(views).length ? { views } : {}) };
 }
 
 /** Keep original table sheets, guide, views and authoring metadata on additive updates. */
@@ -131,16 +169,32 @@ export function computeDiff(
   const baseRuleIds = new Set((baseSpec?.rules ?? []).map((r) => r.rule_id));
   const added_rules = newSpec.rules.filter((r) => !baseRuleIds.has(r.rule_id));
 
+  const baseViewNames = new Set(Object.keys(baseSpec?.views ?? {}));
+  const added_views = Object.keys(newSpec.views ?? {}).filter((n) => !baseViewNames.has(n));
+
   return {
     mode,
     added_tables,
-    added_views: [],
+    added_views,
     added_rules,
     inferred_fks: newSpec.inferred_fks,
     modified_tables,
     unchanged_tables,
     removed_tables,
   };
+}
+
+function viewToRows(view: ModelView): (string | number | null)[][] {
+  const rows: (string | number | null)[][] = [
+    ["source_objects", view.source_objects],
+    ["join_logic", view.join_logic],
+    ["filter_logic", view.filter_logic],
+    ["group_by", view.group_by],
+    [null, null],
+    ["column_name", "data_type", "derivation"],
+  ];
+  for (const c of view.columns) rows.push([c.name, c.dtype, c.derivation]);
+  return rows;
 }
 
 export function writeWorkbook(spec: AgentModelSpec, outputPath: string): void {
@@ -154,11 +208,18 @@ export function writeWorkbook(spec: AgentModelSpec, outputPath: string): void {
   for (const name of Object.keys(spec.tables)) {
     objects.push([name, "TABLE"]);
   }
+  for (const name of Object.keys(spec.views ?? {})) {
+    objects.push([name, "VIEW"]);
+  }
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(objects), "_OBJECTS");
 
   for (const [tableName, cols] of Object.entries(spec.tables)) {
     const rows = [HEADERS, ...cols.map(colToRow)];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), tableName.slice(0, 31));
+  }
+
+  for (const [viewName, view] of Object.entries(spec.views ?? {})) {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(viewToRows(view)), viewName.slice(0, 31));
   }
 
   const rules: (string | null)[][] = [["rule_id", "object", "rule_type", "definition"]];

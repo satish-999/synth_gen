@@ -28,9 +28,30 @@ export interface InferredFK {
   reason: string;
 }
 
+export interface ModelViewColumn {
+  name: string;
+  dtype: string;
+  derivation: string;
+}
+
+export interface ModelView {
+  source_objects: string;
+  join_logic: string | null;
+  filter_logic: string | null;
+  group_by: string | null;
+  columns: ModelViewColumn[];
+}
+
 export interface AgentModelSpec {
   tables: Record<string, ModelColumn[]>;
   rules: ModelRule[];
   inferred_fks: InferredFK[];
   warnings: string[];
+  /**
+   * Optional: absent for every agent-built spec (CREATE/UPDATE/REWRITE never
+   * produce views today). Only populated when a spec originates from
+   * readWorkbook() on a workbook that has view sheets, or from a CSV/JSON
+   * model import that declares views.
+   */
+  views?: Record<string, ModelView>;
 }

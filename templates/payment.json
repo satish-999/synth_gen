@@ -1,0 +1,13 @@
+{
+  "table": "payment",
+  "columns": [
+    { "name": "payment_id", "dtype": "string" },
+    { "name": "order_id", "dtype": "string" },
+    { "name": "payment_date", "dtype": "date" },
+    { "name": "payment_method", "dtype": "string" },
+    { "name": "amount", "dtype": "float" },
+    { "name": "payment_status", "dtype": "string" },
+    { "name": "settled_date", "dtype": "date" },
+    { "name": "reference_no", "dtype": "string" }
+  ]
+}
