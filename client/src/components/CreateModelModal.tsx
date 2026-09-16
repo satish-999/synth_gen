@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { modelTemplateUrl, registerDataModel } from "../api";
+import { modelAuthoringGuideUrl, modelTemplateUrl, registerDataModel, ModelImportError } from "../api";
 
 interface Props {
   onClose: () => void;
@@ -11,6 +11,7 @@ export function CreateModelModal({ onClose, onRegistered }: Props) {
   const [displayName, setDisplayName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -18,6 +19,7 @@ export function CreateModelModal({ onClose, onRegistered }: Props) {
     if (!file || !familyId.trim()) return;
     setBusy(true);
     setError(null);
+    setFieldErrors([]);
 
     const form = new FormData();
     form.append("familyId", familyId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_"));
@@ -29,7 +31,12 @@ export function CreateModelModal({ onClose, onRegistered }: Props) {
       onRegistered(res.family, res.version, displayName.trim() || familyId.trim());
       onClose();
     } catch (err) {
-      setError((err as Error).message);
+      if (err instanceof ModelImportError) {
+        setError(err.message);
+        setFieldErrors(err.fieldErrors);
+      } else {
+        setError((err as Error).message);
+      }
     } finally {
       setBusy(false);
     }
@@ -40,14 +47,23 @@ export function CreateModelModal({ onClose, onRegistered }: Props) {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>Import data model</h2>
         <p className="hint">
-          Upload a complete <strong>data_model.xlsx</strong> workbook (with <code>_OBJECTS</code>, table sheets,
-          and <code>_RULES</code>). The engine validates PKs, FKs, and generators before registering v1.
+          Upload a complete data <strong>model</strong> — every table, column, generator, rule and view —
+          as an <strong>.xlsx</strong> workbook, or as a single <strong>.csv</strong> or <strong>.json</strong> file
+          in the same shape. This is the finished model itself, not raw table metadata for the authoring
+          agent to design one from. The engine validates PKs, FKs, and generators before registering v1.
         </p>
         <p className="hint">
-          <a href={modelTemplateUrl()} download="data_model_template.xlsx">
-            Download reference template
+          <a href={modelTemplateUrl()} download="data_model_TEMPLATE.xlsx">
+            Download the authoring template (.xlsx)
           </a>
-          {" "}(from Design docs)
+          {" · "}
+          <a href={modelAuthoringGuideUrl()} download="DATA_MODEL_AUTHORING_GUIDE.md">
+            authoring guide
+          </a>
+          {" · "}
+          <a href="/docs/CSV_JSON_MODEL_FORMAT.md" target="_blank" rel="noreferrer">
+            CSV/JSON format reference
+          </a>
         </p>
 
         <form onSubmit={handleSubmit}>
@@ -60,16 +76,25 @@ export function CreateModelModal({ onClose, onRegistered }: Props) {
             <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Procurement Demo" />
           </label>
           <label>
-            Data model workbook (.xlsx)
+            Data model file (.xlsx, .xls, .csv or .json)
             <input
               type="file"
-              accept=".xlsx,.xls"
+              accept=".xlsx,.xls,.csv,.json"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               required
             />
           </label>
 
-          {error && <div className="banner bad">{error}</div>}
+          {error && (
+            <div className="banner bad" role="alert">
+              {error}
+              {fieldErrors.length > 1 && (
+                <ul>
+                  {fieldErrors.map((fe, i) => <li key={i}>{fe}</li>)}
+                </ul>
+              )}
+            </div>
+          )}
 
           <div className="modal-actions">
             <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>

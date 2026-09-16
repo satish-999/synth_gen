@@ -59,6 +59,18 @@ app.get("/api/health", (_req, res) => {
 
 app.use(basicAuth);
 
+// Downloadable authoring template + metadata format samples (feature docs:
+// docs/CSV_JSON_MODEL_FORMAT.md, templates/DATA_MODEL_AUTHORING_GUIDE.md).
+// Static files, same auth as everything else in the app.
+const templatesDir = path.join(REPO_ROOT, "templates");
+if (existsSync(templatesDir)) {
+  app.use("/templates", express.static(templatesDir));
+}
+const docsDir = path.join(REPO_ROOT, "docs");
+if (existsSync(docsDir)) {
+  app.use("/docs", express.static(docsDir));
+}
+
 // authenticated diagnostics, for operators rather than probes
 app.get("/api/status", (_req, res) => {
   res.json({

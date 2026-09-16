@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { reviseDataModel } from "../api";
+import { reviseDataModel, ModelImportError } from "../api";
 import type { ActiveModel } from "../types";
 
 type EvolveMode = "UPDATE" | "REWRITE";
@@ -14,6 +14,7 @@ interface Props {
 export function EvolveModelModal({ mode, active, onClose, onRevised }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -21,6 +22,7 @@ export function EvolveModelModal({ mode, active, onClose, onRevised }: Props) {
     if (!file) return;
     setBusy(true);
     setError(null);
+    setFieldErrors([]);
 
     const form = new FormData();
     form.append("mode", mode);
@@ -31,7 +33,12 @@ export function EvolveModelModal({ mode, active, onClose, onRevised }: Props) {
       onRevised(res.family, res.version);
       onClose();
     } catch (err) {
-      setError((err as Error).message);
+      if (err instanceof ModelImportError) {
+        setError(err.message);
+        setFieldErrors(err.fieldErrors);
+      } else {
+        setError((err as Error).message);
+      }
     } finally {
       setBusy(false);
     }
@@ -57,16 +64,25 @@ export function EvolveModelModal({ mode, active, onClose, onRevised }: Props) {
 
         <form onSubmit={handleSubmit}>
           <label>
-            Data model workbook (.xlsx)
+            Data model file (.xlsx, .xls, .csv or .json)
             <input
               type="file"
-              accept=".xlsx,.xls"
+              accept=".xlsx,.xls,.csv,.json"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               required
             />
           </label>
 
-          {error && <div className="banner bad">{error}</div>}
+          {error && (
+            <div className="banner bad" role="alert">
+              {error}
+              {fieldErrors.length > 1 && (
+                <ul>
+                  {fieldErrors.map((fe, i) => <li key={i}>{fe}</li>)}
+                </ul>
+              )}
+            </div>
+          )}
 
           <div className="modal-actions">
             <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>

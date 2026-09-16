@@ -74,15 +74,20 @@ function copySchemaFiles(files: Express.Multer.File[], draftDir: string): void {
 
 const parseUploadedSchemas = readMetadataFiles;
 
+// apiKey, when present, came from the request body for this job only (see
+// POST /agent/jobs below) — it is passed straight through to agentService.ts
+// and never written into the job record, a log line, or the draft/manifest
+// on disk. Only the boolean "was Claude used" (agent_source) is persisted.
 async function processCreateJob(
   jobId: string,
   files: Express.Multer.File[],
   domainHint?: string,
+  apiKey?: string,
 ): Promise<void> {
   updateAgentJob(jobId, { status: "RUNNING" });
   try {
     const schemas = await parseUploadedSchemas(files);
-    const spec = await generateCreateModel(schemas, domainHint);
+    const spec = await generateCreateModel(schemas, domainHint, apiKey);
     const draftDir = path.join(DRAFTS_PATH, jobId);
     mkdirSync(draftDir, { recursive: true });
     copySchemaFiles(files, draftDir);
@@ -93,7 +98,7 @@ async function processCreateJob(
       draft_path: draftDir,
       manifest: readFileSync(manifestPath, "utf8"),
       diff: readFileSync(diffPath, "utf8"),
-      agent_source: ANTHROPIC_API_KEY ? "claude" : "rule-based",
+      agent_source: (ANTHROPIC_API_KEY || apiKey) ? "claude" : "rule-based",
       completed_at: new Date().toISOString(),
     });
   } catch (e) {
@@ -111,6 +116,7 @@ async function processUpdateJob(
   baseVersion: number,
   files: Express.Multer.File[],
   domainHint?: string,
+  apiKey?: string,
 ): Promise<void> {
   updateAgentJob(jobId, { status: "RUNNING" });
   try {
@@ -119,7 +125,7 @@ async function processUpdateJob(
 
     const baseSpec = readWorkbook(baseWb);
     const newSchemas = await parseUploadedSchemas(files);
-    const spec = await generateUpdateModel(baseSpec, newSchemas, familyId, baseVersion, domainHint);
+    const spec = await generateUpdateModel(baseSpec, newSchemas, familyId, baseVersion, domainHint, apiKey);
 
     const draftDir = path.join(DRAFTS_PATH, jobId);
     mkdirSync(draftDir, { recursive: true });
@@ -136,7 +142,7 @@ async function processUpdateJob(
       draft_path: draftDir,
       manifest: readFileSync(manifestPath, "utf8"),
       diff: readFileSync(diffPath, "utf8"),
-      agent_source: ANTHROPIC_API_KEY ? "claude" : "rule-based",
+      agent_source: (ANTHROPIC_API_KEY || apiKey) ? "claude" : "rule-based",
       completed_at: new Date().toISOString(),
     });
   } catch (e) {
@@ -154,6 +160,7 @@ async function processRewriteJob(
   baseVersion: number,
   files: Express.Multer.File[],
   domainHint?: string,
+  apiKey?: string,
 ): Promise<void> {
   updateAgentJob(jobId, { status: "RUNNING" });
   try {
@@ -162,7 +169,7 @@ async function processRewriteJob(
 
     const baseSpec = readWorkbook(baseWb);
     const schemas = await parseUploadedSchemas(files);
-    const spec = await generateRewriteModel(schemas, baseSpec, familyId, baseVersion, domainHint);
+    const spec = await generateRewriteModel(schemas, baseSpec, familyId, baseVersion, domainHint, apiKey);
 
     const draftDir = path.join(DRAFTS_PATH, jobId);
     mkdirSync(draftDir, { recursive: true });
@@ -178,7 +185,7 @@ async function processRewriteJob(
       draft_path: draftDir,
       manifest: readFileSync(manifestPath, "utf8"),
       diff: readFileSync(diffPath, "utf8"),
-      agent_source: ANTHROPIC_API_KEY ? "claude" : "rule-based",
+      agent_source: (ANTHROPIC_API_KEY || apiKey) ? "claude" : "rule-based",
       completed_at: new Date().toISOString(),
     });
   } catch (e) {
@@ -200,6 +207,16 @@ router.post("/agent/jobs", upload.array("schemas", 20), async (req, res) => {
   const displayName = String(req.body.displayName ?? familyId).trim();
   const domainHint = req.body.domainHint ? String(req.body.domainHint) : undefined;
   const baseVersion = req.body.baseVersion != null ? Number(req.body.baseVersion) : null;
+  // Per-request only: read here, passed straight through to agentService.ts,
+  // never stored in the job record (insertAgentJob below has no field for
+  // it), never logged. See processCreateJob/processUpdateJob/
+  // processRewriteJob and agentService.ts's redact() for the rest of the
+  // no-persistence guarantee.
+  const rawApiKey = req.body.anthropicApiKey ? String(req.body.anthropicApiKey).trim() : undefined;
+  if (rawApiKey && rawApiKey.length > 300) {
+    return res.status(400).json({ error: "That doesn't look like a valid Anthropic API key (too long)." });
+  }
+  const apiKey = rawApiKey || undefined;
 
   if (!familyId) return res.status(400).json({ error: "familyId is required." });
 
@@ -246,9 +263,9 @@ router.post("/agent/jobs", upload.array("schemas", 20), async (req, res) => {
     completed_at: null,
   });
 
-  if (mode === "CREATE") void processCreateJob(jobId, files, domainHint);
-  else if (mode === "UPDATE") void processUpdateJob(jobId, familyId, baseVersion!, files, domainHint);
-  else void processRewriteJob(jobId, familyId, baseVersion!, files, domainHint);
+  if (mode === "CREATE") void processCreateJob(jobId, files, domainHint, apiKey);
+  else if (mode === "UPDATE") void processUpdateJob(jobId, familyId, baseVersion!, files, domainHint, apiKey);
+  else void processRewriteJob(jobId, familyId, baseVersion!, files, domainHint, apiKey);
 
   res.status(202).json({ jobId, status: "PENDING", mode, familyId, baseVersion, displayName });
 });

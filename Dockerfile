@@ -50,6 +50,7 @@ COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/client/dist ./client/dist
 
 COPY docs/ ./docs/
+COPY templates/ ./templates/
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \

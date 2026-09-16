@@ -13,12 +13,25 @@ import { writeWorkbook, writeManifest, writeDiffCompare, preserveBaseWorkbook } 
 import path from "node:path";
 import { assertAdditiveUpdate } from './updateGuard.js';
 
+/** Strip a literal secret out of a message before it can reach a thrown
+ * Error, a persisted job record, or a log line. Defense in depth: the
+ * Anthropic SDK's own error messages don't echo the key back, but nothing
+ * downstream should have to rely on that staying true. */
+export function redact(message: string, secret: string | undefined): string {
+  if (!secret) return message;
+  return message.split(secret).join("[redacted]");
+}
+
 async function callClaude(
   mode: "CREATE" | "UPDATE" | "REWRITE",
   schemas: ParsedSchema[],
-  opts?: { domainHint?: string; baseSpec?: AgentModelSpec; familyId?: string; baseVersion?: number },
+  opts?: { domainHint?: string; baseSpec?: AgentModelSpec; familyId?: string; baseVersion?: number; apiKey?: string },
 ): Promise<AgentModelSpec> {
-  const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY, timeout: 120_000, maxRetries: 1 });
+  // Per-request client: a caller-supplied key is used for this call only and
+  // is never stored anywhere (module scope, the job record, a cache) — it
+  // lives only in this function's closure for the duration of this request.
+  const effectiveKey = opts?.apiKey || ANTHROPIC_API_KEY;
+  const client = new Anthropic({ apiKey: effectiveKey, timeout: 120_000, maxRetries: 1 });
   const userPrompt = buildUserPrompt(schemas, {
     mode: mode === "UPDATE" ? "UPDATE" : undefined,
     baseSpec: opts?.baseSpec,
@@ -75,12 +88,13 @@ function finalizeRuleBased(spec: AgentModelSpec): AgentModelSpec {
 export async function generateCreateModel(
   schemas: ParsedSchema[],
   domainHint?: string,
+  apiKey?: string,
 ): Promise<AgentModelSpec> {
-  if (ANTHROPIC_API_KEY) {
+  if (ANTHROPIC_API_KEY || apiKey) {
     try {
-      return await callClaude("CREATE", schemas, { domainHint });
+      return await callClaude("CREATE", schemas, { domainHint, apiKey });
     } catch (e) {
-      throw new Error(`Claude model creation failed: ${(e as Error).message}`);
+      throw new Error(`Claude model creation failed: ${redact((e as Error).message, apiKey)}`);
     }
   }
   return buildModelFromSchemas(schemas);
@@ -92,14 +106,15 @@ export async function generateUpdateModel(
   familyId: string,
   baseVersion: number,
   domainHint?: string,
+  apiKey?: string,
 ): Promise<AgentModelSpec> {
-  if (ANTHROPIC_API_KEY) {
+  if (ANTHROPIC_API_KEY || apiKey) {
     try {
-      const next = await callClaude("UPDATE", newSchemas, { baseSpec, familyId, baseVersion, domainHint });
+      const next = await callClaude("UPDATE", newSchemas, { baseSpec, familyId, baseVersion, domainHint, apiKey });
       assertAdditiveUpdate(baseSpec, next);
       return next;
     } catch (e) {
-      throw new Error(`Claude model update failed: ${(e as Error).message}`);
+      throw new Error(`Claude model update failed: ${redact((e as Error).message, apiKey)}`);
     }
   }
   const next = extendModelFromBase(baseSpec, newSchemas);
@@ -113,12 +128,13 @@ export async function generateRewriteModel(
   familyId: string,
   baseVersion: number,
   domainHint?: string,
+  apiKey?: string,
 ): Promise<AgentModelSpec> {
-  if (ANTHROPIC_API_KEY) {
+  if (ANTHROPIC_API_KEY || apiKey) {
     try {
-      return await callClaude("REWRITE", schemas, { baseSpec, familyId, baseVersion, domainHint });
+      return await callClaude("REWRITE", schemas, { baseSpec, familyId, baseVersion, domainHint, apiKey });
     } catch (e) {
-      throw new Error(`Claude model rewrite failed: ${(e as Error).message}`);
+      throw new Error(`Claude model rewrite failed: ${redact((e as Error).message, apiKey)}`);
     }
   }
   const spec = buildModelFromSchemas(schemas);
