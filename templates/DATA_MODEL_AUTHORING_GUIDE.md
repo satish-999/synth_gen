@@ -73,6 +73,13 @@ Every table sheet has this header row, then one row per column of that table.
 | 11 | `is_unique` | `Y` to forbid duplicates | `Y` |
 | 12 | `business_rule` | Rule IDs from `_RULES` that touch this column | `R2,R3` |
 
+A unique column (`is_unique = Y`) that can't produce enough distinct values
+for the requested row count fails generation with a clear error after 10,000
+retries per value, rather than hanging — widen the pattern (more `#`/`?`
+positions) or lower the row count. `normalize_model.py` catches the common
+case (a pattern too narrow for the row count you're likely to request) and
+widens it automatically before you hit this.
+
 ### The rule that matters most
 > **A column with `fk_ref` filled must have `generator` EMPTY.**
 
@@ -115,7 +122,7 @@ flat 3 everywhere. Raise the middle number for more children per parent; raise
 | `date_offset` | Date relative to another column | `base=order_date; min_days=14; max_days=120` | `2026-04-08` |
 | `sequence` | Counter restarting per parent | `scope=po_number; start=1` | `1,2,3` per PO |
 | `fk_lookup` | Exact copy of a parent attribute | `source=PURCHASE_ORDER.po_nbr; via=po_header_ref` | lineage column |
-| `fk_lookup_jitter` | Parent value ± percentage | `source=PART.unit_cost; jitter_pct=0.15; round=2` | `1033.12` |
+| `fk_lookup_jitter` | Parent value ± percentage, then an optional flat multiplier | `source=PART.unit_cost; jitter_pct=0.15; round=2` (add `multiplier=1.2` for a 20% markup) | `1033.12` |
 | `derived` | Arithmetic over sibling columns | `expr=quantity * unit_price; round=2` | `84715.84` |
 | `case` | Conditional text/flag | `when1=late_qty > 0; then1=LATE; when2=early_qty > 0; then2=EARLY; else=ON_TIME` | `ON_TIME` |
 
@@ -139,6 +146,10 @@ it always reconciles with its base data. Layout differs from a table sheet:
 | `filter_logic` | `status != 'CANCELLED'` |
 | `group_by` | `supplier_id, supplier_name` |
 
+Leave `group_by` empty for a pass-through view: every row from the joined and
+filtered source tables is kept as-is, with no aggregation. Use this for a
+filtered or reshaped extract rather than a rollup.
+
 **Column rows (blank row, then a header row, then one row per output column)**
 
 | column_name | data_type | derivation |
@@ -152,6 +163,14 @@ it always reconciles with its base data. Layout differs from a table sheet:
 Supported grammar: column references, arithmetic, `case when … then … else … end`,
 and the aggregates `count / sum / avg / min / max`. Anything outside it is a
 parse error, never silently ignored.
+
+**Do not add any row after the last output column.** The parser has no
+end-of-section marker for the column list — once it sees the `column_name`
+header, every subsequent row with a non-empty first cell is read as another
+output column, all the way to the bottom of the sheet. A trailing comment or
+note row there is not decoration; it is parsed as a column with no
+`derivation` and crashes generation. Put explanatory notes in this guide or in
+`_GUIDE`, never below the column list on a view sheet.
 
 ---
 
