@@ -36,7 +36,7 @@ export async function registerWorkbookFromFile(
 
   const newSpec = readWorkbook(input.workbookSource);
   const tableCount = Object.keys(newSpec.tables).length;
-  const viewCount = 0;
+  const viewCount = Object.keys(newSpec.views ?? {}).length;
 
   let diff: AgentDiff | null = null;
   let diffPath: string | undefined;

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
-import { copyFileSync, createReadStream, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { REPO_ROOT, UPLOADS_PATH } from "../config.js";
 import {
@@ -18,6 +18,8 @@ import {
   registerWorkbookFromFile,
 } from "../services/modelRegistrationService.js";
 import { getModelObjects } from "../services/modelService.js";
+import { parseModelCsv, parseModelJson } from "../services/modelImport.js";
+import { writeWorkbook } from "../services/workbookBuilder.js";
 
 mkdirSync(UPLOADS_PATH, { recursive: true });
 const upload = multer({ dest: UPLOADS_PATH, limits: { fileSize: 20 * 1024 * 1024 } });
@@ -25,12 +27,50 @@ const upload = multer({ dest: UPLOADS_PATH, limits: { fileSize: 20 * 1024 * 1024
 const router = Router();
 
 const TEMPLATE_CANDIDATES = [
+  path.join(REPO_ROOT, "templates", "data_model_TEMPLATE.xlsx"),
   path.join(REPO_ROOT, "Design docs", "data_model.xlsx"),
   path.join(REPO_ROOT, "engine", "data_model_demo.xlsx"),
 ];
 
 function slugFamilyId(raw: string): string {
   return raw.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+}
+
+class ModelImportError extends Error {
+  status = 400;
+  fieldErrors: string[];
+  constructor(fieldErrors: string[]) {
+    super(fieldErrors.length === 1 ? fieldErrors[0] : `${fieldErrors.length} problems found in the uploaded file.`);
+    this.fieldErrors = fieldErrors;
+  }
+}
+
+/**
+ * Accepts a .xlsx/.xls workbook (used as-is) or a .csv/.json data-model file
+ * (parsed, then written through the real writeWorkbook() to produce an
+ * actual workbook) and returns a staged .xlsx path ready for
+ * registerWorkbookFromFile — the exact same function either way, so a CSV or
+ * JSON import is validated and registered identically to an uploaded
+ * workbook. Throws ModelImportError with per-field messages on a parse
+ * failure; never lets a parser exception surface as a raw 500.
+ */
+function stageModelFile(file: Express.Multer.File, stagedXlsxPath: string): void {
+  const ext = path.extname(file.originalname).toLowerCase();
+  mkdirSync(path.dirname(stagedXlsxPath), { recursive: true });
+
+  if (ext === ".csv" || ext === ".json") {
+    const content = readFileSync(file.path, "utf8");
+    const { spec, errors } = ext === ".csv" ? parseModelCsv(content) : parseModelJson(content);
+    if (errors.length > 0 || !spec) {
+      throw new ModelImportError(errors.length ? errors : ["Could not parse this file into a data model."]);
+    }
+    writeWorkbook(spec, stagedXlsxPath);
+    return;
+  }
+
+  // .xlsx / .xls (or anything else — validate_model.py / XLSX.read will
+  // reject it downstream with a clear error rather than silently accepting it)
+  copyFileSync(file.path, stagedXlsxPath);
 }
 
 /** List all model families and their versions. */
@@ -56,26 +96,28 @@ router.get("/models/template", (_req, res) => {
   createReadStream(template).pipe(res);
 });
 
-/** Register a new family from an uploaded data_model.xlsx (no agent). */
+/** Register a new family from an uploaded data model: .xlsx/.xls workbook,
+ * or a .csv/.json representation of the same structure (no agent). */
 router.post("/models/register", upload.single("workbook"), async (req, res) => {
   const familyId = slugFamilyId(String(req.body.familyId ?? ""));
   const displayName = String(req.body.displayName ?? familyId).trim();
   const file = req.file;
 
   if (!familyId) return res.status(400).json({ error: "familyId is required." });
-  if (!file) return res.status(400).json({ error: "Upload data_model.xlsx as 'workbook'." });
+  if (!file) return res.status(400).json({ error: "Upload a data model as 'workbook' (.xlsx, .xls, .csv or .json)." });
 
   try {
     assertCanCreateFamily(familyId);
     const staged = path.join(UPLOADS_PATH, "register", `${familyId}-${Date.now()}.xlsx`);
-    mkdirSync(path.dirname(staged), { recursive: true });
-    copyFileSync(file.path, staged);
+    const registeredBy = { ".csv": "csv-import", ".json": "json-import" }[path.extname(file.originalname).toLowerCase()];
+    stageModelFile(file, staged);
 
     const result = await registerWorkbookFromFile({
       workbookSource: staged,
       family: familyId,
       displayName,
       mode: "CREATE",
+      registeredBy,
     });
 
     res.status(201).json({
@@ -83,15 +125,21 @@ router.post("/models/register", upload.single("workbook"), async (req, res) => {
       version: result.ref.version,
       modelKey: result.ref.modelKey,
       tableCount: result.tableCount,
+      viewCount: result.viewCount,
       diff: result.diff,
     });
   } catch (e) {
+    if (e instanceof ModelImportError) {
+      return res.status(e.status).json({ error: e.message, fieldErrors: e.fieldErrors });
+    }
     const err = e as Error & { status?: number };
     res.status(err.status ?? 500).json({ error: err.message });
   }
 });
 
-/** Upload a new workbook version (update or rewrite) — validates then registers v(N+1). */
+/** Upload a new data model version (update or rewrite) — .xlsx/.xls, or a
+ * .csv/.json representation of the same structure — validates then
+ * registers v(N+1). */
 router.post("/models/:family/:version/revise", upload.single("workbook"), async (req, res) => {
   const familyId = String(req.params.family);
   const baseVersion = Number(req.params.version);
@@ -104,13 +152,13 @@ router.post("/models/:family/:version/revise", upload.single("workbook"), async 
   if (!["UPDATE", "REWRITE"].includes(mode)) {
     return res.status(400).json({ error: "mode must be UPDATE or REWRITE." });
   }
-  if (!file) return res.status(400).json({ error: "Upload data_model.xlsx as 'workbook'." });
+  if (!file) return res.status(400).json({ error: "Upload a data model as 'workbook' (.xlsx, .xls, .csv or .json)." });
 
   try {
     assertCanReviseFamily(familyId, baseVersion);
     const staged = path.join(UPLOADS_PATH, "revise", `${familyId}-v${baseVersion}-${Date.now()}.xlsx`);
-    mkdirSync(path.dirname(staged), { recursive: true });
-    copyFileSync(file.path, staged);
+    const registeredBy = { ".csv": "csv-import", ".json": "json-import" }[path.extname(file.originalname).toLowerCase()];
+    stageModelFile(file, staged);
 
     const family = getFamily(familyId)!;
     const result = await registerWorkbookFromFile({
@@ -119,6 +167,7 @@ router.post("/models/:family/:version/revise", upload.single("workbook"), async 
       displayName: family.display_name,
       mode: mode as "UPDATE" | "REWRITE",
       baseVersion,
+      registeredBy,
     });
 
     res.status(201).json({
@@ -127,9 +176,13 @@ router.post("/models/:family/:version/revise", upload.single("workbook"), async 
       modelKey: result.ref.modelKey,
       baseVersion,
       tableCount: result.tableCount,
+      viewCount: result.viewCount,
       diff: result.diff,
     });
   } catch (e) {
+    if (e instanceof ModelImportError) {
+      return res.status(e.status).json({ error: e.message, fieldErrors: e.fieldErrors });
+    }
     const err = e as Error & { status?: number };
     res.status(err.status ?? 500).json({ error: err.message });
   }
